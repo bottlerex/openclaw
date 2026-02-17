@@ -411,45 +411,28 @@ async function fetchMemories(query, userId = 'rex', limit = 5) {
   }
 }
 
-// Memory batch accumulator
-let memoryBatch = [];
-const BATCH_SIZE = 3;  // 每 3 條對話的關鍵內容積累後批量存儲
+function storeMemory(userText, assistantText, userId = 'rex') {
+  // Fire-and-forget: send full conversation to mem0 for LLM-based extraction
+  if (!userText || !assistantText) return;
+  // Skip very short or trivial exchanges
+  if (userText.length < 10 && assistantText.length < 20) return;
 
-async function flushMemoryBatch(userId = "rex") {
-  if (memoryBatch.length === 0) return;
-  try {
-    const items = memoryBatch.map(item => ({
-      text: item.text,
-      metadata: { timestamp: new Date().toISOString() },
-    }));
-    const result = await mem0Request("/memory/add_batch", "POST", {
-      user_id: userId,
-      items: items,
+  const messages = [
+    { role: 'user', content: userText.slice(0, 2000) },
+    { role: 'assistant', content: assistantText.slice(0, 2000) },
+  ];
+  mem0Request('/memory/add', 'POST', { user_id: userId, messages })
+    .then(r => {
+      metrics.memoryAdds++;
+      const added = r?.result?.results?.length || 0;
+      if (added > 0) {
+        console.log(`[wrapper] mem0 add: extracted ${added} memories for user=${userId}`);
+      }
+    })
+    .catch(e => {
+      metrics.memoryErrors++;
+      console.error(`[wrapper] mem0 add error: ${e.message}`);
     });
-    metrics.memoryAdds += result.added || 0;
-    metrics.memoryErrors += result.failed || 0;
-    console.log(`[wrapper] mem0 batch: added=${result.added}, failed=${result.failed}`);
-    memoryBatch = [];
-  } catch (e) {
-    console.error(`[wrapper] mem0 batch error: ${e.message}`);
-    metrics.memoryErrors += memoryBatch.length;
-    memoryBatch = [];
-  }
-}
-
-function storeMemory(userText, assistantText, userId = "rex") {
-  // Accumulate memory items for batch processing
-  if (userText && assistantText) {
-    memoryBatch.push({
-      text: `Q: ${userText.slice(0, 100)}nA: ${assistantText.slice(0, 100)}`,
-    });
-  }
-  // Flush if batch is full
-  if (memoryBatch.length >= BATCH_SIZE) {
-    flushMemoryBatch(userId).catch(e => console.error(`[wrapper] batch flush error: ${e.message}`));
-  }
-}
-
 }
 
 // ─── Utility Functions ─────────────────────────────────────────

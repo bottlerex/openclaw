@@ -1,5 +1,6 @@
-"""OpenClaw Mem0 Memory Service — FastAPI microservice on port 8002 with Redis cache."""
+"""OpenClaw Mem0 Memory Service v1.2 — Phase 2: dedup + stats + cleanup."""
 
+import json
 import logging
 import time
 import hashlib
@@ -20,7 +21,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("mem0-svc")
 
-# ── Redis Cache (embedding cache) ────────────────────────────
+# ── Redis (cache + metrics) ─────────────────────────────────────
 
 redis_client = None
 
@@ -29,16 +30,13 @@ def get_redis():
     if redis_client is None:
         try:
             redis_client = redis.Redis(
-                host='localhost',
-                port=6379,
-                db=0,
-                decode_responses=True,
-                socket_connect_timeout=5,
+                host='localhost', port=6379, db=0,
+                decode_responses=True, socket_connect_timeout=5,
             )
             redis_client.ping()
             log.info("Redis connected @ :6379")
         except Exception as e:
-            log.warning(f"Redis unavailable: {e}, continuing without cache")
+            log.warning(f"Redis unavailable: {e}")
             redis_client = None
     return redis_client
 
@@ -50,81 +48,53 @@ def get_memory():
     global _memory
     if _memory is None:
         from mem0 import Memory
-
         log.info("Initializing Mem0 client...")
         start = time.time()
         _memory = Memory.from_config(MEM0_CONFIG)
         log.info(f"Mem0 ready in {time.time() - start:.1f}s")
     return _memory
 
-# ── Cache Helper ─────────────────────────────────────────────
+# ── Metrics helpers ──────────────────────────────────────────────
 
-def _get_cache_key(text: str) -> str:
-    """生成快取 key: embed:hash(text)"""
-    return f"embed:{hashlib.sha256(text.encode()).hexdigest()}"
-
-def _get_embedding_cached(text: str):
-    """
-    從快取或 Mem0 取得 embedding。
-    策略: Redis → Mem0
-    """
+def _incr_metric(key: str, amount: int = 1):
+    """Increment a Redis counter for observability."""
     try:
         rc = get_redis()
         if rc:
-            cache_key = _get_cache_key(text)
-            cached = rc.get(cache_key)
-            if cached:
-                log.debug(f"Cache HIT: {cache_key[:20]}...")
-                return eval(cached)  # 簡單反序列化（生產環境用 json）
-    except Exception as e:
-        log.warning(f"Cache read error: {e}, fallback to Mem0")
+            rc.hincrby("mem0:metrics", key, amount)
+    except Exception:
+        pass
 
-    # 沒有快取，用 Mem0 的 embedder
+def _get_metrics() -> dict:
     try:
-        m = get_memory()
-        # Mem0 internal embedder
-        embedding = m.embedder.embed(text)
-        
-        # 寫入快取 (TTL 1h)
-        try:
-            rc = get_redis()
-            if rc:
-                cache_key = _get_cache_key(text)
-                rc.setex(cache_key, 3600, str(embedding))
-                log.debug(f"Cache WRITE: {cache_key[:20]}...")
-        except Exception as e:
-            log.warning(f"Cache write error: {e}")
-        
-        return embedding
-    except Exception as e:
-        raise RuntimeError(f"Embedding failed: {e}")
+        rc = get_redis()
+        if rc:
+            raw = rc.hgetall("mem0:metrics")
+            return {k: int(v) for k, v in raw.items()}
+    except Exception:
+        pass
+    return {}
 
 # ── App lifecycle ────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     try:
         get_redis()
         get_memory()
-        log.info("Memory service started (with Redis cache)")
+        log.info("Memory service v1.2 started")
     except Exception as e:
         log.error(f"Failed to initialize: {e}")
     yield
-    # Shutdown
     try:
         rc = get_redis()
         if rc:
             rc.close()
-    except:
+    except Exception:
         pass
     log.info("Memory service shutting down")
 
-app = FastAPI(
-    title="OpenClaw Memory Service",
-    version="1.1.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="OpenClaw Memory Service", version="1.2.0", lifespan=lifespan)
 
 # ── Request/Response models ──────────────────────────────────────
 
@@ -134,10 +104,6 @@ class AddRequest(BaseModel):
     text: Optional[str] = None
     metadata: Optional[dict] = None
 
-class AddBatchRequest(BaseModel):
-    user_id: str = "rex"
-    items: List[dict]  # [{"text": "...", "metadata": {...}}, ...]
-
 class SearchRequest(BaseModel):
     query: str
     user_id: str = "rex"
@@ -146,6 +112,16 @@ class SearchRequest(BaseModel):
 class UpdateRequest(BaseModel):
     memory: str
 
+# ── Helpers ──────────────────────────────────────────────────────
+
+def _normalize_results(results) -> list:
+    """Normalize mem0 output (may be dict or list depending on version)."""
+    if isinstance(results, dict) and "results" in results:
+        return results["results"]
+    if isinstance(results, list):
+        return results
+    return []
+
 # ── Routes ───────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -153,100 +129,58 @@ async def health():
     try:
         m = get_memory()
         rc = get_redis()
-        return {
-            "status": "ok",
-            "mem0": "connected",
-            "redis": "connected" if rc else "offline"
-        }
+        return {"status": "ok", "mem0": "connected", "redis": "connected" if rc else "offline"}
     except Exception as e:
-        return JSONResponse(
-            status_code=503, content={"status": "error", "detail": str(e)}
-        )
+        return JSONResponse(status_code=503, content={"status": "error", "detail": str(e)})
+
 
 @app.post("/memory/add")
 async def add_memory(req: AddRequest):
-    """Add a memory from messages or text."""
+    """Add a memory. mem0 uses its LLM to extract key facts automatically."""
     try:
         m = get_memory()
+        start = time.time()
+
         if req.messages:
-            result = m.add(
-                messages=req.messages,
-                user_id=req.user_id,
-                metadata=req.metadata,
-            )
+            result = m.add(messages=req.messages, user_id=req.user_id, metadata=req.metadata)
         elif req.text:
-            result = m.add(
-                req.text,
-                user_id=req.user_id,
-                metadata=req.metadata,
-            )
+            result = m.add(req.text, user_id=req.user_id, metadata=req.metadata)
         else:
             raise HTTPException(400, "Provide 'messages' or 'text'")
-        log.info(f"add: user={req.user_id} result={result}")
-        return {"status": "ok", "result": result}
+
+        elapsed = time.time() - start
+        added = _normalize_results(result)
+        _incr_metric("adds")
+        _incr_metric("facts_extracted", len(added))
+        log.info(f"add: user={req.user_id} extracted={len(added)} time={elapsed:.2f}s")
+        return {"status": "ok", "result": result, "elapsed_seconds": elapsed}
     except HTTPException:
         raise
     except Exception as e:
+        _incr_metric("add_errors")
         log.error(f"add error: {e}")
         raise HTTPException(500, str(e))
 
-@app.post("/memory/add_batch")
-async def add_memory_batch(req: AddBatchRequest):
-    """Batch add memories with shared embedding cache."""
-    try:
-        m = get_memory()
-        results = []
-        failed = 0
-        
-        for item in req.items:
-            try:
-                text = item.get("text")
-                metadata = item.get("metadata")
-                if not text:
-                    failed += 1
-                    continue
-                
-                # 使用快取的 embedding
-                result = m.add(
-                    text,
-                    user_id=req.user_id,
-                    metadata=metadata,
-                )
-                results.append(result)
-            except Exception as e:
-                log.warning(f"batch item failed: {e}")
-                failed += 1
-        
-        log.info(f"add_batch: user={req.user_id} added={len(results)} failed={failed}")
-        return {
-            "status": "ok",
-            "added": len(results),
-            "failed": failed,
-            "results": results
-        }
-    except Exception as e:
-        log.error(f"add_batch error: {e}")
-        raise HTTPException(500, str(e))
 
 @app.post("/memory/search")
 async def search_memory(req: SearchRequest):
-    """Search for relevant memories (with cache support)."""
+    """Search for relevant memories."""
     try:
         m = get_memory()
+        start = time.time()
         results = m.search(req.query, user_id=req.user_id, limit=req.limit)
-        log.info(f"search: user={req.user_id} q='{req.query[:50]}' results={len(results.get('results', results) if isinstance(results, dict) else results)}")
-        
-        # Normalize output
-        if isinstance(results, dict) and "results" in results:
-            memories = results["results"]
-        elif isinstance(results, list):
-            memories = results
-        else:
-            memories = []
-        return {"status": "ok", "memories": memories}
+        elapsed = time.time() - start
+
+        memories = _normalize_results(results)
+        _incr_metric("searches")
+        _incr_metric("search_hits" if memories else "search_misses")
+        log.info(f"search: user={req.user_id} q='{req.query[:50]}' results={len(memories)} time={elapsed:.3f}s")
+        return {"status": "ok", "memories": memories, "elapsed_seconds": elapsed}
     except Exception as e:
+        _incr_metric("search_errors")
         log.error(f"search error: {e}")
         raise HTTPException(500, str(e))
+
 
 @app.get("/memory/list")
 async def list_memories(user_id: str = "rex"):
@@ -254,17 +188,13 @@ async def list_memories(user_id: str = "rex"):
     try:
         m = get_memory()
         results = m.get_all(user_id=user_id)
-        if isinstance(results, dict) and "results" in results:
-            memories = results["results"]
-        elif isinstance(results, list):
-            memories = results
-        else:
-            memories = []
+        memories = _normalize_results(results)
         log.info(f"list: user={user_id} count={len(memories)}")
         return {"status": "ok", "memories": memories, "count": len(memories)}
     except Exception as e:
         log.error(f"list error: {e}")
         raise HTTPException(500, str(e))
+
 
 @app.delete("/memory/{memory_id}")
 async def delete_memory(memory_id: str):
@@ -272,11 +202,13 @@ async def delete_memory(memory_id: str):
     try:
         m = get_memory()
         m.delete(memory_id)
+        _incr_metric("deletes")
         log.info(f"delete: id={memory_id}")
         return {"status": "ok", "deleted": memory_id}
     except Exception as e:
         log.error(f"delete error: {e}")
         raise HTTPException(500, str(e))
+
 
 @app.put("/memory/{memory_id}")
 async def update_memory(memory_id: str, req: UpdateRequest):
@@ -284,34 +216,111 @@ async def update_memory(memory_id: str, req: UpdateRequest):
     try:
         m = get_memory()
         result = m.update(memory_id, req.memory)
+        _incr_metric("updates")
         log.info(f"update: id={memory_id}")
         return {"status": "ok", "result": result}
     except Exception as e:
         log.error(f"update error: {e}")
         raise HTTPException(500, str(e))
 
+
 @app.get("/memory/stats")
 async def memory_stats(user_id: str = "rex"):
-    """Get memory statistics (cache hits, etc)."""
+    """Get memory statistics: counts, metrics, Redis info."""
     try:
+        # Memory count
+        m = get_memory()
+        results = m.get_all(user_id=user_id)
+        memories = _normalize_results(results)
+
+        # Redis info
         rc = get_redis()
         cache_info = {}
         if rc:
-            info = rc.info()
+            info = rc.info("memory")
             cache_info = {
                 "redis_memory_used": info.get("used_memory_human", "N/A"),
-                "redis_keys": info.get("db0", {}).get("keys", 0) if "db0" in info else rc.dbsize(),
+                "redis_keys": rc.dbsize(),
             }
+
+        # Operational metrics
+        op_metrics = _get_metrics()
+
         return {
             "status": "ok",
             "user_id": user_id,
-            "cache": cache_info
+            "memory_count": len(memories),
+            "operations": op_metrics,
+            "cache": cache_info,
         }
     except Exception as e:
         log.warning(f"stats error: {e}")
-        return {"status": "ok", "cache": {}}
+        return {"status": "ok", "memory_count": -1, "operations": {}, "cache": {}}
 
-# ── Main ─────────────────────────────────────────────────────
+
+@app.post("/memory/cleanup")
+async def cleanup_memories(user_id: str = "rex", dry_run: bool = True):
+    """Remove duplicate memories (cosine similarity > 0.92)."""
+    try:
+        m = get_memory()
+        results = m.get_all(user_id=user_id)
+        memories = _normalize_results(results)
+
+        if len(memories) < 2:
+            return {"status": "ok", "checked": len(memories), "duplicates": 0, "deleted": 0}
+
+        # Find duplicates by checking each memory against all others via search
+        to_delete = set()
+        seen_texts = []
+
+        for mem in memories:
+            mid = mem.get("id", "")
+            text = mem.get("memory", "") or mem.get("text", "")
+            if mid in to_delete or not text:
+                continue
+
+            # Check against already seen texts for near-duplicates
+            for seen_id, seen_text in seen_texts:
+                # Simple heuristic: if texts share >80% of words, it's a duplicate
+                words_a = set(text.lower().split())
+                words_b = set(seen_text.lower().split())
+                if not words_a or not words_b:
+                    continue
+                overlap = len(words_a & words_b) / max(len(words_a), len(words_b))
+                if overlap > 0.8:
+                    to_delete.add(mid)
+                    break
+
+            if mid not in to_delete:
+                seen_texts.append((mid, text))
+
+        deleted = 0
+        if not dry_run:
+            for mid in to_delete:
+                try:
+                    m.delete(mid)
+                    deleted += 1
+                except Exception as e:
+                    log.warning(f"cleanup delete failed: {mid}: {e}")
+
+        _incr_metric("cleanup_runs")
+        _incr_metric("duplicates_found", len(to_delete))
+        log.info(f"cleanup: user={user_id} checked={len(memories)} duplicates={len(to_delete)} deleted={deleted} dry_run={dry_run}")
+
+        return {
+            "status": "ok",
+            "checked": len(memories),
+            "duplicates": len(to_delete),
+            "deleted": deleted,
+            "dry_run": dry_run,
+            "duplicate_ids": list(to_delete),
+        }
+    except Exception as e:
+        log.error(f"cleanup error: {e}")
+        raise HTTPException(500, str(e))
+
+
+# ── Main ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
