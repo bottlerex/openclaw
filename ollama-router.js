@@ -1,12 +1,13 @@
-// OpenClaw Ollama Router — GLM-4.7-Flash priority routing
-// Routes requests to local Ollama first, falls back to Claude on failure/timeout
+// OpenClaw Ollama Router — Ollama-first routing with model selection
+// Default: qwen2.5-coder:7b (fast), @glm: glm-4.7-flash (powerful)
 
 const http = require('http');
 
 const OLLAMA_HOST = 'localhost';
 const OLLAMA_PORT = 11434;
-const OLLAMA_MODEL = 'glm-4.7-flash';
-const OLLAMA_TIMEOUT = 60000; // 60 seconds (handles cold start ~36s + processing)
+const OLLAMA_MODEL = 'qwen2.5-coder:7b';
+const OLLAMA_MODEL_GLM = 'glm-4.7-flash';
+const OLLAMA_TIMEOUT = 30000; // 30 seconds (7B model is fast, no need for 60s)
 
 // ─── Stats ───────────────────────────────────────────────────────
 
@@ -26,7 +27,8 @@ function detectForceModel(userText) {
   if (!userText) return null;
   const lower = userText.toLowerCase();
   if (lower.includes('@claude') || lower.includes('@haiku')) return 'claude';
-  if (lower.includes('@ollama') || lower.includes('@glm')) return 'ollama';
+  if (lower.includes('@glm')) return 'glm';       // GLM-4.7-Flash specifically
+  if (lower.includes('@ollama')) return 'ollama';  // default Ollama model
   return null;
 }
 
@@ -63,16 +65,18 @@ function assessQuality(response, userText) {
 
 // ─── Ollama Chat ─────────────────────────────────────────────────
 
-function tryOllamaChat(messages, timeout) {
-  timeout = timeout || OLLAMA_TIMEOUT;
+function tryOllamaChat(messages, options) {
+  const model = (options && options.model) || OLLAMA_MODEL;
+  const timeout = (options && options.timeout) || OLLAMA_TIMEOUT;
+
   return new Promise((resolve) => {
     const startTime = Date.now();
     ollamaStats.total++;
 
     const body = JSON.stringify({
-      model: OLLAMA_MODEL,
+      model: model,
       messages: messages,
-      keep_alive: "1h",
+      keep_alive: '1h',
       stream: false,
     });
 
@@ -109,7 +113,7 @@ function tryOllamaChat(messages, timeout) {
           resolve({
             success: true,
             content: content,
-            model: OLLAMA_MODEL,
+            model: model,
             latency: latency,
             usage: parsed.usage || {},
           });
@@ -138,11 +142,20 @@ function tryOllamaChat(messages, timeout) {
   });
 }
 
+// ─── Model Selection Helper ──────────────────────────────────────
+
+function getModelForForce(forceModel) {
+  if (forceModel === 'glm') return { model: OLLAMA_MODEL_GLM, timeout: 60000 };
+  return { model: OLLAMA_MODEL, timeout: OLLAMA_TIMEOUT };
+}
+
 // ─── Stats API ───────────────────────────────────────────────────
 
 function getStats() {
   return {
     ...ollamaStats,
+    defaultModel: OLLAMA_MODEL,
+    glmModel: OLLAMA_MODEL_GLM,
     avgLatency: ollamaStats.total > 0
       ? Math.round(ollamaStats.totalLatency / ollamaStats.total)
       : 0,
@@ -157,8 +170,10 @@ module.exports = {
   assessQuality,
   detectForceModel,
   stripForceDirective,
+  getModelForForce,
   getStats,
   ollamaStats,
   OLLAMA_MODEL,
+  OLLAMA_MODEL_GLM,
   OLLAMA_TIMEOUT,
 };

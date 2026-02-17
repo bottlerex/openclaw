@@ -1257,21 +1257,23 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   }
 
   // Priority 4: Ollama-first routing for normal conversation
-  if (!skillContext && forceModel !== 'claude') {
+  if (!skillContext && forceModel !== 'claude') {  // 'ollama', 'glm', or null → try Ollama
     metrics.normalChat++;
     console.log(`[wrapper] #${reqId} trying Ollama GLM-4.7-Flash...`);
 
     // Prepare messages with system prompt + memory for Ollama
     const ollamaMessages = prepareOllamaMessages(msgs, memoryContext);
-    const ollamaResult = await ollamaRouter.tryOllamaChat(ollamaMessages);
+    const ollamaOpts = (forceModel === 'glm') ? ollamaRouter.getModelForForce('glm') : {};
+    const ollamaResult = await ollamaRouter.tryOllamaChat(ollamaMessages, ollamaOpts);
 
     if (ollamaResult.success) {
       const quality = ollamaRouter.assessQuality(ollamaResult.content, userText);
 
-      if (quality >= 0.7 || forceModel === 'ollama') {
+      if (quality >= 0.7 || forceModel === 'ollama' || forceModel === 'glm') {
         metrics.ollamaRouted++;
         const latencySec = (ollamaResult.latency / 1000).toFixed(1);
-        const footer = `\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nOllama GLM-4.7-Flash (${latencySec}s)`;
+        const modelName = ollamaResult.model || 'qwen2.5-coder:7b';
+        const footer = `\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nOllama ${modelName} (${latencySec}s)`;
         console.log(`[wrapper] #${reqId} ollama OK: quality=${quality.toFixed(2)} latency=${ollamaResult.latency}ms`);
 
         if (userText && ollamaResult.content.length > 10) {
