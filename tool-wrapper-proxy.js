@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// OpenClaw Tool Wrapper Proxy v10
+// OpenClaw Tool Wrapper Proxy v10.1
+// v10.1: GLM-4.7-Flash Ollama-first routing with Claude fallback
 // v10: Mem0 memory layer — persistent cross-session memory via mem0-service (:8002)
 // v9: Smart intent (strong/weak signals), /health, /metrics, rate limiting, error handling
 // v8: Dev mode — spawn `claude -p` for development tasks (read/write/test)
@@ -9,13 +10,14 @@
 const http = require('http');
 const { execFile, spawn } = require('child_process');
 const path = require('path');
+const ollamaRouter = require('./ollama-router');
 
 const UPSTREAM_HOST = 'localhost';
 const UPSTREAM_PORT = 3456;
 const LISTEN_PORT = 3457;
 const SKILL_API_PORT = 8000;
 const MEM0_PORT = 8002;
-const VERSION = '10.0.0';
+const VERSION = '10.1.0';
 const startedAt = Date.now();
 
 // ─── Metrics ─────────────────────────────────────────────────────
@@ -32,6 +34,8 @@ const metrics = {
   memoryAdds: 0,
   memoryErrors: 0,
   progressQueries: 0,
+  ollamaRouted: 0,
+  ollamaFallback: 0,
 };
 
 // ─── Rate Limiting ──────────────────────────────────────────────
@@ -350,6 +354,33 @@ const BOT_SYSTEM_PROMPT = `你是 Rex 的 Telegram 開發助理。你熟悉他�
 - 不要提到 MEMORY.md、CLAUDE.md 等內部檔案名稱
 
 風格: 繁體中文、簡潔（3-5句，技術討論可長些）、不用 emoji、不問「需要更多幫助嗎」`;
+
+// ─── Ollama System Prompt (compact for faster inference) ────────
+
+const OLLAMA_SYSTEM_PROMPT = `你是 Rex 的 Telegram 助理。用繁體中文回答，簡潔 3-5 句。
+能力: 搜尋、系統狀態、日曆/郵件、開發任務、投資分析。
+風格: 直接、不用 emoji、不問「需要更多幫助嗎」`;
+
+function prepareOllamaMessages(messages, memoryContext) {
+  if (!messages || !messages.length) return messages;
+  let msgs = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({ ...m, content: normalizeContent(m.content) }));
+
+  let sys = OLLAMA_SYSTEM_PROMPT;
+  // Include memory but keep it short (max 500 chars)
+  if (memoryContext) {
+    const shortMemory = memoryContext.slice(0, 500);
+    sys += `\n\n用戶資訊:\n${shortMemory}`;
+  }
+
+  // Only keep last 4 messages to reduce context
+  if (msgs.length > 4) {
+    msgs = msgs.slice(-4);
+  }
+
+  return [{ role: 'system', content: sys }, ...msgs];
+}
 
 // ─── Memory Layer (Mem0) ─────────────────────────────────────────
 
@@ -1074,7 +1105,14 @@ function proxyPassThrough(req, res) {
 async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   const msgs = parsed.messages || [];
   const lastUserMsg = [...msgs].reverse().find(m => m.role === 'user');
-  const userText = lastUserMsg ? normalizeContent(lastUserMsg.content) : '';
+  let userText = lastUserMsg ? normalizeContent(lastUserMsg.content) : '';
+
+  // Detect force model directive (@claude, @ollama, @glm)
+  const forceModel = ollamaRouter.detectForceModel(userText);
+  if (forceModel) {
+    userText = ollamaRouter.stripForceDirective(userText);
+    console.log(`[wrapper] #${reqId} force model: ${forceModel}`);
+  }
 
   let skillContext = null;
   let memoryContext = null;
@@ -1218,9 +1256,45 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
     }
   }
 
-  // Priority 4: Normal conversation (fallback to proxy)
-  if (!skillContext) metrics.normalChat++;
+  // Priority 4: Ollama-first routing for normal conversation
+  if (!skillContext && forceModel !== 'claude') {
+    metrics.normalChat++;
+    console.log(`[wrapper] #${reqId} trying Ollama GLM-4.7-Flash...`);
 
+    // Prepare messages with system prompt + memory for Ollama
+    const ollamaMessages = prepareOllamaMessages(msgs, memoryContext);
+    const ollamaResult = await ollamaRouter.tryOllamaChat(ollamaMessages);
+
+    if (ollamaResult.success) {
+      const quality = ollamaRouter.assessQuality(ollamaResult.content, userText);
+
+      if (quality >= 0.7 || forceModel === 'ollama') {
+        metrics.ollamaRouted++;
+        const latencySec = (ollamaResult.latency / 1000).toFixed(1);
+        const footer = `\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nOllama GLM-4.7-Flash (${latencySec}s)`;
+        console.log(`[wrapper] #${reqId} ollama OK: quality=${quality.toFixed(2)} latency=${ollamaResult.latency}ms`);
+
+        if (userText && ollamaResult.content.length > 10) {
+          storeMemory(userText, ollamaResult.content);
+        }
+        return sendDirectResponse(reqId, ollamaResult.content + footer, wantsStream, res);
+      }
+
+      // Quality too low — fallback
+      ollamaRouter.ollamaStats.qualityReject++;
+      ollamaRouter.ollamaStats.fallback++;
+      metrics.ollamaFallback++;
+      console.log(`[wrapper] #${reqId} ollama quality reject: ${quality.toFixed(2)}, fallback to Claude`);
+    } else {
+      ollamaRouter.ollamaStats.fallback++;
+      metrics.ollamaFallback++;
+      console.log(`[wrapper] #${reqId} ollama ${ollamaResult.reason}: fallback to Claude`);
+    }
+  } else if (!skillContext) {
+    metrics.normalChat++;
+  }
+
+  // Claude (fallback, forced, or has skill context)
   if (wantsStream) {
     streamPassthrough(reqId, parsed, res, skillContext, memoryContext, userText);
   } else {
@@ -1315,10 +1389,44 @@ function handleMetrics(res) {
       normal_pct: ((metrics.normalChat / metrics.requests) * 100).toFixed(1) + '%',
       error_pct: ((metrics.errors / metrics.requests) * 100).toFixed(1) + '%',
     } : null,
+    ollama: ollamaRouter.getStats(),
     memory: {
       searches: metrics.memorySearches,
       adds: metrics.memoryAdds,
       errors: metrics.memoryErrors,
+    },
+  };
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(data, null, 2));
+}
+
+// ─── Model Usage Endpoint ─────────────────────────────────────
+
+function handleModelUsage(res) {
+  const os = ollamaRouter.getStats();
+  const data = {
+    ollama: {
+      model: ollamaRouter.OLLAMA_MODEL,
+      calls: os.total,
+      success: os.success,
+      timeout: os.timeout,
+      error: os.error,
+      fallback: os.fallback,
+      qualityReject: os.qualityReject,
+      avgLatency: os.avgLatency,
+      successRate: os.successRate,
+    },
+    claude: {
+      calls: metrics.normalChat - metrics.ollamaRouted,
+      fromFallback: metrics.ollamaFallback,
+    },
+    routing: {
+      totalNormalChat: metrics.normalChat,
+      ollamaRouted: metrics.ollamaRouted,
+      ollamaFallback: metrics.ollamaFallback,
+      ollamaPct: metrics.normalChat > 0
+        ? ((metrics.ollamaRouted / metrics.normalChat) * 100).toFixed(1) + '%'
+        : 'N/A',
     },
   };
   res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1336,6 +1444,11 @@ const server = http.createServer((req, res) => {
   // Metrics endpoint
   if (req.url === '/metrics' && req.method === 'GET') {
     return handleMetrics(res);
+  }
+
+  // Model usage stats
+  if ((req.url === '/metrics/model-usage' || req.url === '/metrics/model') && req.method === 'GET') {
+    return handleModelUsage(res);
   }
 
   if (!req.url.startsWith('/v1/chat/completions')) {
@@ -1378,6 +1491,7 @@ server.listen(LISTEN_PORT, '0.0.0.0', () => {
   console.log(`[wrapper] Dev tools: ${DEV_TOOLS}`);
   console.log(`[wrapper] Dev timeout: ${DEV_TIMEOUT_MS / 1000}s, max output: ${DEV_MAX_OUTPUT} chars`);
   console.log(`[wrapper] Rate limits: dev=${rateLimits.dev.max}/5min, skill=${rateLimits.skill.max}/min`);
-  console.log(`[wrapper] Endpoints: /health, /metrics`);
-  console.log(`[wrapper] Mode: streaming + smart-intent + CLI + dev-mode + mem0 routing`);
+  console.log(`[wrapper] Ollama: ${ollamaRouter.OLLAMA_MODEL} at localhost:11434 (timeout: ${ollamaRouter.OLLAMA_TIMEOUT / 1000}s)`);
+  console.log(`[wrapper] Mode: streaming + smart-intent + CLI + dev-mode + mem0 + ollama-first routing`);
+  console.log(`[wrapper] Endpoints: /health, /metrics, /metrics/model-usage`);
 });

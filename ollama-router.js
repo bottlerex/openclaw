@@ -1,0 +1,164 @@
+// OpenClaw Ollama Router — GLM-4.7-Flash priority routing
+// Routes requests to local Ollama first, falls back to Claude on failure/timeout
+
+const http = require('http');
+
+const OLLAMA_HOST = 'localhost';
+const OLLAMA_PORT = 11434;
+const OLLAMA_MODEL = 'glm-4.7-flash';
+const OLLAMA_TIMEOUT = 60000; // 60 seconds (handles cold start ~36s + processing)
+
+// ─── Stats ───────────────────────────────────────────────────────
+
+const ollamaStats = {
+  total: 0,
+  success: 0,
+  timeout: 0,
+  error: 0,
+  fallback: 0,
+  qualityReject: 0,
+  totalLatency: 0,
+};
+
+// ─── Force Model Detection ───────────────────────────────────────
+
+function detectForceModel(userText) {
+  if (!userText) return null;
+  const lower = userText.toLowerCase();
+  if (lower.includes('@claude') || lower.includes('@haiku')) return 'claude';
+  if (lower.includes('@ollama') || lower.includes('@glm')) return 'ollama';
+  return null;
+}
+
+function stripForceDirective(userText) {
+  return userText.replace(/@(?:claude|haiku|ollama|glm)\b/gi, '').trim();
+}
+
+// ─── Quality Assessment ──────────────────────────────────────────
+
+function assessQuality(response, userText) {
+  if (!response || response.length < 5) return 0;
+
+  let score = 0.8; // base score
+
+  // Too short for a meaningful response
+  if (response.length < 20) score -= 0.3;
+
+  // Has structure (code blocks, lists)
+  if (response.includes('```')) score += 0.1;
+  if (response.includes('\n- ') || response.includes('\n1.')) score += 0.05;
+
+  // Repetitive content detection
+  const words = response.split(/\s+/);
+  if (words.length > 20) {
+    const uniqueRatio = new Set(words).size / words.length;
+    if (uniqueRatio < 0.3) score -= 0.4; // very repetitive
+  }
+
+  // Truncated or incomplete
+  if (response.endsWith('...') && response.length < 100) score -= 0.2;
+
+  return Math.max(0, Math.min(1, score));
+}
+
+// ─── Ollama Chat ─────────────────────────────────────────────────
+
+function tryOllamaChat(messages, timeout) {
+  timeout = timeout || OLLAMA_TIMEOUT;
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    ollamaStats.total++;
+
+    const body = JSON.stringify({
+      model: OLLAMA_MODEL,
+      messages: messages,
+      keep_alive: "1h",
+      stream: false,
+    });
+
+    const opts = {
+      hostname: OLLAMA_HOST,
+      port: OLLAMA_PORT,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      timeout: timeout,
+    };
+
+    const req = http.request(opts, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => {
+        const latency = Date.now() - startTime;
+        ollamaStats.totalLatency += latency;
+
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.message?.content || '';
+
+          if (!content) {
+            ollamaStats.error++;
+            resolve({ success: false, reason: 'empty_response', latency });
+            return;
+          }
+
+          ollamaStats.success++;
+          resolve({
+            success: true,
+            content: content,
+            model: OLLAMA_MODEL,
+            latency: latency,
+            usage: parsed.usage || {},
+          });
+        } catch (e) {
+          ollamaStats.error++;
+          resolve({ success: false, reason: 'parse_error', error: e.message, latency });
+        }
+      });
+    });
+
+    req.on('error', (e) => {
+      const latency = Date.now() - startTime;
+      ollamaStats.error++;
+      resolve({ success: false, reason: 'connection_error', error: e.message, latency });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      const latency = Date.now() - startTime;
+      ollamaStats.timeout++;
+      resolve({ success: false, reason: 'timeout', latency });
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
+// ─── Stats API ───────────────────────────────────────────────────
+
+function getStats() {
+  return {
+    ...ollamaStats,
+    avgLatency: ollamaStats.total > 0
+      ? Math.round(ollamaStats.totalLatency / ollamaStats.total)
+      : 0,
+    successRate: ollamaStats.total > 0
+      ? ((ollamaStats.success / ollamaStats.total) * 100).toFixed(1) + '%'
+      : 'N/A',
+  };
+}
+
+module.exports = {
+  tryOllamaChat,
+  assessQuality,
+  detectForceModel,
+  stripForceDirective,
+  getStats,
+  ollamaStats,
+  OLLAMA_MODEL,
+  OLLAMA_TIMEOUT,
+};
