@@ -60,6 +60,21 @@ function assessQuality(response, userText) {
   // Truncated or incomplete
   if (response.endsWith('...') && response.length < 100) score -= 0.2;
 
+
+  // Language mismatch: user wrote Chinese but response is mostly non-Chinese
+  const hasChinese = (t) => /[一-鿿]/.test(t);
+  if (userText && hasChinese(userText)) {
+    const chineseChars = (response.match(/[一-鿿]/g) || []).length;
+    const totalChars = response.replace(/\s/g, "").length;
+    if (totalChars > 20 && chineseChars / totalChars < 0.1) {
+      score -= 0.3; // response should contain Chinese if user asked in Chinese
+    }
+  }
+
+  // Refuse/deflect detection (model says it cant help)
+  const deflect = /i cannot|i can't|as an ai|i'm unable|i don't have/i;
+  if (deflect.test(response) && response.length < 200) score -= 0.2;
+
   return Math.max(0, Math.min(1, score));
 }
 

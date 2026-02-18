@@ -447,6 +447,9 @@ function storeMemory(userText, assistantText, userId = 'rex') {
   if (!userText || !assistantText) return;
   // Skip very short or trivial exchanges
   if (userText.length < 10 && assistantText.length < 20) return;
+  // Skip greetings and trivial messages
+  const trivial = /^(你好|嗨|hi|hello|hey|ok|好的|謝謝|thanks|bye|掰|test|測試)[\s!！.。?？]*$/i;
+  if (trivial.test(userText.trim())) return;
 
   const messages = [
     { role: 'user', content: userText.slice(0, 2000) },
@@ -1259,7 +1262,8 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   // Priority 4: Ollama-first routing for normal conversation
   if (!skillContext && forceModel !== 'claude') {  // 'ollama', 'glm', or null → try Ollama
     metrics.normalChat++;
-    console.log(`[wrapper] #${reqId} trying Ollama GLM-4.7-Flash...`);
+    const ollamaModelName = (forceModel === 'glm') ? 'glm-4.7-flash' : 'qwen2.5-coder:7b';
+    console.log(`[wrapper] #${reqId} trying Ollama ${ollamaModelName}...`);
 
     // Prepare messages with system prompt + memory for Ollama
     const ollamaMessages = prepareOllamaMessages(msgs, memoryContext);
