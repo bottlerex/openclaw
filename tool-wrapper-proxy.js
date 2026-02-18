@@ -1106,6 +1106,46 @@ function proxyPassThrough(req, res) {
 // ─── Main Handler ──────────────────────────────────────────────
 
 async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
+  // Ollama health check: restart if unresponsive
+  const checkOllamaHealth = async () => {
+    try {
+      const response = await new Promise((resolve, reject) => {
+        const opts = {
+          hostname: 'localhost',
+          port: 11434,
+          path: '/api/tags',
+          method: 'GET',
+          timeout: 3000,
+        };
+        const req = http.request(opts, (res) => {
+          if (res.statusCode === 200) resolve(true);
+          else resolve(false);
+        });
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+        req.end();
+      });
+      
+      if (!response) {
+        console.log();
+        const { execSync } = require('child_process');
+        try {
+          execSync('launchctl stop com.ollama.optimized && sleep 2 && launchctl start com.ollama.optimized', { timeout: 10000 });
+          console.log();
+        } catch (e) {
+          console.error();
+        }
+      }
+    } catch (e) {
+      // Silently fail health check
+    }
+  };
+  
+  // Check health every 100 requests (low overhead)
+  if (metrics.requests % 100 === 0) {
+    checkOllamaHealth();
+  }
+
   const msgs = parsed.messages || [];
   const lastUserMsg = [...msgs].reverse().find(m => m.role === 'user');
   let userText = lastUserMsg ? normalizeContent(lastUserMsg.content) : '';
