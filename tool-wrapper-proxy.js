@@ -174,7 +174,7 @@ const SKILL_ROUTES = [
   },
   {
     name: 'system_status',
-    keywords: ['系統狀態', '系統健康', 'cpu', '記憶體', '磁碟', '服務狀態', '健康檢查', 'system status'],
+    keywords: ['系統狀態', '系統健康', 'cpu', '記憶體', 'ram', '磁碟', '磁碟空間', '服務狀態', '健康檢查', 'system status', 'disk', 'memory', '佔用', '使用率', '容器狀態', 'docker status'],
     buildParams: () => ({ mode: 'full' })
   },
   {
@@ -196,10 +196,13 @@ const SKILL_ROUTES = [
   },
   {
     name: 'google_workspace',
-    keywords: ['行程', '日曆', '會議', '約會', 'calendar', '郵件', '信件', 'email', 'gmail', '雲端硬碟', 'drive'],
+    keywords: ['行程', '日曆', '會議', '約會', 'calendar', '郵件', '信件', 'email', 'gmail', '雲端硬碟', 'drive', '過濾', '退訂', '取消訂閱', 'filter', 'unsubscribe', '封鎖'],
     subIntents: {
       'calendar.list': ['行程', '日曆', '會議', '約會', 'calendar', '今天行程', '明天行程'],
       'calendar.create': ['新增行程', '加行程', '建立會議', '排會議'],
+      'gmail.batch_delete': ['刪除郵件', '刪郵件', '清理郵件', '批量刪除', '刪除垃圾', 'delete email', 'delete mail', 'trash email'],
+      'gmail.filter_create': ['過濾', '過濾規則', '自動刪除', '封鎖寄件者', '封鎖', 'filter', 'block sender', 'block'],
+      'gmail.unsubscribe': ['取消訂閱', '退訂', 'unsubscribe'],
       'gmail.list': ['郵件', '信件', 'email', 'gmail', '收件匣', 'inbox'],
       'gmail.send': ['寄信', '發郵件', '發信', 'send email'],
       'drive.list': ['雲端硬碟', 'drive', '檔案列表'],
@@ -208,6 +211,24 @@ const SKILL_ROUTES = [
       const lower = text.toLowerCase();
       for (const [mode, kws] of Object.entries(SKILL_ROUTES[3].subIntents)) {
         if (kws.some(k => lower.includes(k))) {
+          // Gmail filter_create: extract sender from text
+          if (mode === 'gmail.filter_create') {
+            const senderInfo = extractSenderFromText(text);
+            return { mode, from_address: senderInfo.address, filter_action: senderInfo.action };
+          }
+          // Gmail unsubscribe: needs to search sender first, handled by wrapper
+          if (mode === 'gmail.unsubscribe') {
+            return { mode: 'gmail.unsubscribe', query: text };
+          }
+          // Gmail: convert natural language to Gmail search syntax
+          if (mode === 'gmail.list') {
+            let gmailQuery = 'is:unread';
+            if (lower.includes('已讀') || lower.includes('read')) gmailQuery = 'is:read';
+            if (lower.includes('starred') || lower.includes('星號') || lower.includes('重要')) gmailQuery += ' is:starred';
+            if (lower.includes('今天') || lower.includes('today')) gmailQuery += ' newer_than:1d';
+            if (lower.includes('這週') || lower.includes('this week')) gmailQuery += ' newer_than:7d';
+            return { mode, query: gmailQuery, max_results: 5 };
+          }
           return { mode, query: text, max_results: 5 };
         }
       }
@@ -282,6 +303,141 @@ const SKILL_ROUTES = [
     }
   }
 ];
+
+
+// ─── Skill Tools Definition for Claude Tool-Use (fallback routing) ─
+
+const SKILL_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'system_status',
+      description: '查詢系統狀態和資源使用情況。包括 CPU、記憶體、磁碟、容器狀態等。當用戶問「RAM 佔用多少」、「系統怎樣」、「CPU 使用率」、「容器狀態」、「磁碟空間」等問題時調用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            description: '查詢模式：full（完整狀態）或 quick（快速檢查）',
+            enum: ['full', 'quick']
+          }
+        },
+        required: ['mode']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: '搜尋網路資訊。當用戶要求搜索、查詢最新資訊、新聞時調用。返回相關的網頁結果。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: '搜尋關鍵詞'
+          },
+          max_results: {
+            type: 'integer',
+            description: '最多返回的結果數（1-10）',
+            default: 5
+          }
+        },
+        required: ['query']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'google_workspace',
+      description: '操作 Google 服務（Gmail、Google Calendar、Google Drive）。支持的操作：gmail.list（查看郵件）、gmail.read（讀取特定郵件）、gmail.send（發送郵件）、gmail.delete（刪除郵件）、gmail.batch_delete（批量刪除）、gmail.unsubscribe（取消訂閱）、gmail.filter_create（建立過濾規則）、gmail.filter_list（查看過濾規則）、calendar.list（查看行程）、calendar.create（建立行程）、drive.list（列出雲端硬碟檔案）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            description: '執行的操作模式',
+            enum: ['gmail.list', 'gmail.read', 'gmail.send', 'gmail.delete', 'gmail.batch_delete', 'gmail.unsubscribe', 'gmail.filter_create', 'gmail.filter_list', 'calendar.list', 'calendar.create', 'drive.list']
+          },
+          query: {
+            type: 'string',
+            description: '搜尋或操作的查詢文本'
+          },
+          max_results: {
+            type: 'integer',
+            description: '最多返回的結果數'
+          }
+        },
+        required: ['mode']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'docker_control',
+      description: '控制 Docker 容器。支持的操作：list（列出容器）、restart（重啟容器）、logs（查看日誌）、stats（查看資源使用）。當用戶要求重啟容器、查看容器狀態、查看日誌時調用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            description: '執行的操作',
+            enum: ['list', 'restart', 'logs', 'stats']
+          },
+          container: {
+            type: 'string',
+            description: '容器名稱或 ID（如果適用）'
+          }
+        },
+        required: ['action']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'work_tracker_query',
+      description: '查詢工作追蹤數據。支持的查詢：today（今天的工作記錄）、week（本週工作統計）、hours（本週工時統計）、recent（最近的工作記錄）。當用戶問「今天做了什麼」、「這週做了什麼」、「工時統計」等時調用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: {
+            type: 'string',
+            description: '查詢模式',
+            enum: ['today', 'week', 'hours', 'recent']
+          }
+        },
+        required: ['mode']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'scheduler',
+      description: '管理排程和提醒。支持的操作：add（新增排程）、cancel（取消排程）、list（查看排程）。當用戶要求設定提醒、排程、鬧鐘時調用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            description: '排程操作',
+            enum: ['add', 'cancel', 'list']
+          },
+          description: {
+            type: 'string',
+            description: '排程的描述或內容'
+          }
+        },
+        required: ['action']
+      }
+    }
+  }
+];
+
 
 // ─── CLI Tool Routes ──────────────────────────────────────────
 const CLI_ROUTES = [
@@ -482,11 +638,162 @@ function normalizeContent(content) {
   return String(content || '');
 }
 
+// ─── Gmail Filter/Unsubscribe Helpers ─────────────────────────
+
+// Known sender domains for filter creation
+const KNOWN_SENDERS = {
+  '104': { address: '104.com.tw', name: '104人力銀行' },
+  '人力銀行': { address: '104.com.tw', name: '104人力銀行' },
+  'tailscale': { address: 'tailscale.com', name: 'Tailscale' },
+  'razer': { address: 'razer.com', name: 'Razer' },
+  'google alerts': { address: 'googlealerts-noreply@google.com', name: 'Google Alerts' },
+  'google 快訊': { address: 'googlealerts-noreply@google.com', name: 'Google Alerts' },
+  '嘖嘖': { address: 'zeczec.com', name: '嘖嘖' },
+  'zeczec': { address: 'zeczec.com', name: '嘖嘖' },
+  'nintendo': { address: 'nintendo', name: 'Nintendo' },
+  '任天堂': { address: 'nintendo', name: 'Nintendo' },
+  'facebook': { address: 'facebookmail.com', name: 'Facebook' },
+  'fb': { address: 'facebookmail.com', name: 'Facebook' },
+  'pubu': { address: 'pubu.com.tw', name: 'Pubu' },
+  '元大': { address: 'yuanta', name: '元大' },
+  'github': { address: 'github.com', name: 'GitHub' },
+};
+
+function extractSenderFromText(text) {
+  const lower = text.toLowerCase();
+
+  // Check known senders
+  for (const [kw, info] of Object.entries(KNOWN_SENDERS)) {
+    if (lower.includes(kw.toLowerCase())) {
+      // Determine action from text
+      let action = 'trash';  // default: auto-delete
+      if (lower.includes('標記已讀') || lower.includes('mark read')) action = 'read';
+      if (lower.includes('封存') || lower.includes('archive')) action = 'archive';
+      if (lower.includes('星號') || lower.includes('star')) action = 'star';
+      return { address: info.address, action, name: info.name };
+    }
+  }
+
+  // Try to extract email address from text
+  const emailMatch = text.match(/[\w.-]+@[\w.-]+\.\w+/);
+  if (emailMatch) {
+    let action = 'trash';
+    if (lower.includes('標記已讀') || lower.includes('mark read')) action = 'read';
+    if (lower.includes('封存') || lower.includes('archive')) action = 'archive';
+    return { address: emailMatch[0], action };
+  }
+
+  // Try to extract domain-like string
+  const domainMatch = text.match(/[\w.-]+\.\w{2,}/);
+  if (domainMatch) {
+    return { address: domainMatch[0], action: 'trash' };
+  }
+
+  // Fallback: use the text after action keywords as sender
+  const afterBlock = text.match(/(?:封鎖|過濾|block|filter)\s+(.+)/i);
+  if (afterBlock) {
+    return { address: afterBlock[1].trim(), action: 'trash' };
+  }
+
+  return { address: text, action: 'trash' };
+}
+
+async function handleGmailFilterCreate(reqId, userText, wantsStream, res) {
+  const senderInfo = extractSenderFromText(userText);
+  console.log(`[wrapper] #${reqId} gmail filter_create: from=${senderInfo.address} action=${senderInfo.action}`);
+
+  try {
+    const result = await callSkill('google_workspace', {
+      mode: 'gmail.filter_create',
+      from_address: senderInfo.address,
+      filter_action: senderInfo.action,
+    });
+
+    const content = result?.result?.content ? JSON.parse(result.result.content) : result?.content ? JSON.parse(result.content) : result;
+    if (content?.status === 'created') {
+      const actionDesc = { trash: '自動刪除', read: '標記已讀', archive: '封存', star: '加星號' };
+      const response = `已建立過濾規則：來自 ${senderInfo.name || senderInfo.address} 的郵件將${actionDesc[senderInfo.action] || '自動刪除'}。\n\n規則 ID: ${content.filter_id}`;
+      return sendDirectResponse(reqId, response, wantsStream, res);
+    }
+
+    const errorMsg = content?.error || '未知錯誤';
+    return sendDirectResponse(reqId, `建立過濾規則失敗：${errorMsg}`, wantsStream, res);
+  } catch (e) {
+    console.error(`[wrapper] #${reqId} gmail filter_create error: ${e.message}`);
+    return sendDirectResponse(reqId, `建立過濾規則失敗：${e.message}`, wantsStream, res);
+  }
+}
+
+async function handleGmailUnsubscribe(reqId, userText, wantsStream, res) {
+  console.log(`[wrapper] #${reqId} gmail unsubscribe: "${userText.slice(0, 80)}"`);
+
+  try {
+    // Step 1: Extract sender from text and search for their emails
+    const senderInfo = extractSenderFromText(userText);
+    const searchQuery = `from:${senderInfo.address}`;
+
+    const searchResult = await callSkill('google_workspace', {
+      mode: 'gmail.list',
+      query: searchQuery,
+      max_results: 1,
+    });
+
+    const searchContent = searchResult?.result?.content
+      ? JSON.parse(searchResult.result.content)
+      : searchResult?.content ? JSON.parse(searchResult.content) : null;
+
+    if (!searchContent?.messages?.length) {
+      return sendDirectResponse(reqId, `找不到來自 ${senderInfo.name || senderInfo.address} 的郵件，無法執行退訂。`, wantsStream, res);
+    }
+
+    const messageId = searchContent.messages[0].id;
+    const sender = searchContent.messages[0].from || senderInfo.address;
+
+    // Step 2: Call unsubscribe with the message ID
+    const unsubResult = await callSkill('google_workspace', {
+      mode: 'gmail.unsubscribe',
+      message_id: messageId,
+    });
+
+    const unsubContent = unsubResult?.result?.content
+      ? JSON.parse(unsubResult.result.content)
+      : unsubResult?.content ? JSON.parse(unsubResult.content) : unsubResult;
+
+    if (unsubContent?.status === 'unsubscribed') {
+      const method = unsubContent.method === 'http_post' ? 'HTTP 退訂連結'
+        : unsubContent.method === 'http_get' ? 'HTTP 退訂連結'
+        : '退訂郵件';
+      return sendDirectResponse(reqId, `已退訂 ${sender} — 透過${method}完成。\n後續郵件可能需要幾天才會停止。`, wantsStream, res);
+    }
+
+    if (unsubContent?.status === 'no_unsubscribe') {
+      return sendDirectResponse(reqId, `${sender} 的郵件沒有退訂連結 (List-Unsubscribe header)。\n建議改用「封鎖 ${senderInfo.address}」建立過濾規則自動刪除。`, wantsStream, res);
+    }
+
+    const errorMsg = unsubContent?.error || '退訂失敗';
+    return sendDirectResponse(reqId, `退訂 ${sender} 失敗：${errorMsg}`, wantsStream, res);
+  } catch (e) {
+    console.error(`[wrapper] #${reqId} gmail unsubscribe error: ${e.message}`);
+    return sendDirectResponse(reqId, `退訂失敗：${e.message}`, wantsStream, res);
+  }
+}
+
 // ─── Skill Intent Detection ────────────────────────────────────
 
 function detectSkillIntent(text) {
   if (!text) return null;
   const lower = text.toLowerCase();
+
+  // Priority override: gmail/calendar operations beat web_search
+  const gmailActionWords = ["刪除郵件", "刪郵件", "清理郵件", "批量刪除", "刪除垃圾",
+    "未讀郵件", "查看郵件", "寄信", "發郵件", "收件匣",
+    "過濾", "過濾規則", "封鎖寄件者", "封鎖", "取消訂閱", "退訂",
+    "delete email", "trash email", "inbox", "send email",
+    "filter", "block sender", "unsubscribe"];
+  if (gmailActionWords.some(kw => lower.includes(kw))) {
+    const gws = SKILL_ROUTES.find(r => r.name === "google_workspace");
+    if (gws) return { skillName: gws.name, params: gws.buildParams(text) };
+  }
 
   for (const route of SKILL_ROUTES) {
     if (route.keywords.some(kw => lower.includes(kw))) {
@@ -609,6 +916,87 @@ function formatSkillResult(skillName, result) {
   } catch (e) {
     return `[${skillName} 錯誤] ${e.message}`;
   }
+}
+
+// ─── Gmail Batch Delete Handler ───────────────────────────────
+
+async function handleGmailBatchDelete(reqId, userText, wantsStream, res) {
+  // Parse sender filters from natural language
+  const lower = userText.toLowerCase();
+  const senderFilters = [];
+  
+  // Common spam/promo senders detection
+  const knownFilters = [
+    { kw: ['104', '人力銀行', '104人力'], query: 'from:104.com.tw' },
+    { kw: ['tailscale'], query: 'from:tailscale.com' },
+    { kw: ['razer'], query: 'from:razer.com' },
+    { kw: ['google alerts', 'google 快訊'], query: 'from:googlealerts-noreply@google.com' },
+    { kw: ['嘖嘖', 'zeczec'], query: 'from:zeczec.com' },
+    { kw: ['nintendo', '任天堂'], query: 'from:nintendo' },
+    { kw: ['facebook', 'fb'], query: 'from:facebookmail.com' },
+    { kw: ['pubu'], query: 'from:pubu.com.tw' },
+    { kw: ['元大'], query: 'from:yuanta' },
+    { kw: ['github'], query: 'from:github.com' },
+    { kw: ['促銷', 'promotions', '行銷'], query: 'category:promotions' },
+    { kw: ['垃圾', 'spam'], query: 'is:unread category:promotions' },
+  ];
+  
+  for (const f of knownFilters) {
+    if (f.kw.some(k => lower.includes(k))) {
+      senderFilters.push(f.query);
+    }
+  }
+  
+  // If no specific filter detected, default to promotions
+  if (senderFilters.length === 0) {
+    senderFilters.push('is:unread category:promotions');
+  }
+  
+  let totalDeleted = 0;
+  const deletedSummary = [];
+  
+  for (const filter of senderFilters) {
+    try {
+      // Step 1: Search
+      const searchResult = await callSkill('google_workspace', {
+        mode: 'gmail.list',
+        query: filter,
+        max_results: 50,
+      });
+      
+      const content = searchResult?.content ? JSON.parse(searchResult.content) : searchResult?.result?.content ? JSON.parse(searchResult.result.content) : null;
+      if (!content || !content.messages || content.messages.length === 0) {
+        continue;
+      }
+      
+      // Step 2: Delete each message
+      let count = 0;
+      for (const msg of content.messages) {
+        try {
+          await callSkill('google_workspace', {
+            mode: 'gmail.delete',
+            message_id: msg.id,
+          });
+          count++;
+        } catch (e) {
+          console.error(`[wrapper] #${reqId} gmail delete error: ${e.message}`);
+        }
+      }
+      
+      totalDeleted += count;
+      const senderName = content.messages[0]?.from?.split('<')[0]?.trim() || filter;
+      deletedSummary.push(`- ${senderName}: ${count} 封已移至垃圾桶`);
+      console.log(`[wrapper] #${reqId} gmail batch delete: ${filter} → ${count}/${content.messages.length} deleted`);
+    } catch (e) {
+      console.error(`[wrapper] #${reqId} gmail batch search error for ${filter}: ${e.message}`);
+    }
+  }
+  
+  const response = totalDeleted > 0
+    ? '已批量清理 ' + totalDeleted + ' 封郵件（移至垃圾桶，30 天內可還原）：\n\n' + deletedSummary.join('\n')
+    : '未找到符合條件的郵件可刪除。';
+  
+  return sendDirectResponse(reqId, response, wantsStream, res);
 }
 
 // ─── Dev Mode Detection (v9: Smart Intent) ───────────────────────
@@ -1287,6 +1675,16 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
         console.log(`[wrapper] #${reqId} skill: ${intent.skillName} params: ${JSON.stringify(intent.params).slice(0, 100)}`);
         metrics.skillCalls++;
         try {
+          // Gmail special handlers: batch_delete, filter_create, unsubscribe
+          if (intent.params.mode === 'gmail.batch_delete') {
+            return await handleGmailBatchDelete(reqId, userText, wantsStream, res);
+          }
+          if (intent.params.mode === 'gmail.filter_create') {
+            return await handleGmailFilterCreate(reqId, userText, wantsStream, res);
+          }
+          if (intent.params.mode === 'gmail.unsubscribe') {
+            return await handleGmailUnsubscribe(reqId, userText, wantsStream, res);
+          }
           const result = await callSkill(intent.skillName, intent.params);
           skillContext = formatSkillResult(intent.skillName, result);
           console.log(`[wrapper] #${reqId} skill result: ${skillContext.length} chars`);
@@ -1300,7 +1698,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   }
 
   // Priority 4: Ollama-first routing for normal conversation
-  if (!skillContext && forceModel !== 'claude') {  // 'ollama', 'glm', or null → try Ollama
+  if (!skillContext && (forceModel === 'ollama' || forceModel === 'glm')) {  // Only @ollama or @glm → try Ollama
     metrics.normalChat++;
     const ollamaModelName = (forceModel === 'glm') ? 'glm-4.7-flash' : 'qwen2.5-coder:7b';
     console.log(`[wrapper] #${reqId} trying Ollama ${ollamaModelName}...`);
@@ -1341,10 +1739,192 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   }
 
   // Claude (fallback, forced, or has skill context)
-  if (wantsStream) {
-    streamPassthrough(reqId, parsed, res, skillContext, memoryContext, userText);
+  if (!skillContext) {
+    // No skill matched — let Claude decide using tool-use
+    return await handleWithSkillTools(reqId, parsed, res, wantsStream, memoryContext, skillContext, userText);
   } else {
-    forwardNonStreaming(reqId, parsed, res, skillContext, memoryContext, userText);
+    // Skill matched or has context — use traditional passthrough
+    if (wantsStream) {
+      streamPassthrough(reqId, parsed, res, skillContext, memoryContext, userText);
+    } else {
+      forwardNonStreaming(reqId, parsed, res, skillContext, memoryContext, userText);
+    }
+  }
+}
+
+
+// ─── Call Claude API (non-streaming) ───────────────────────────
+
+
+// ─── Call Claude API (non-streaming) ───────────────────────────
+
+function callClaudeNonStreaming(messages, tools, toolChoice) {
+  return new Promise((resolve, reject) => {
+    const body = {
+      model: 'claude-haiku-4-5-20251001',
+      messages,
+      max_tokens: 2048,
+      ...(tools ? { tools, tool_choice: toolChoice || 'auto' } : {})
+    };
+
+    const data = JSON.stringify(body);
+    const opts = {
+      hostname: UPSTREAM_HOST,
+      port: UPSTREAM_PORT,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(data),
+        'Authorization': 'Bearer not-needed',
+        'x-api-key': process.env.CLAUDE_CODE_OAUTH_TOKEN || ''
+      },
+      timeout: 60000
+    };
+
+    const req = http.request(opts, (res) => {
+      let chunks = '';
+      res.on('data', c => chunks += c);
+      res.on('end', () => {
+        try {
+          const response = JSON.parse(chunks);
+          resolve(response);
+        } catch (e) {
+          reject(new Error(`Claude response parse error: ${e.message}`));
+        }
+      });
+    });
+
+    req.on('error', e => reject(e));
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Claude API timeout'));
+    });
+
+    req.write(data);
+    req.end();
+  });
+}
+
+// ─── Handle Tool-Use Fallback (Claude decides which skill to call) ─
+
+async function handleWithSkillTools(reqId, parsedBody, res, wantsStream, memoryContext, skillContext, userText) {
+  const messages = parsedBody.messages || [];
+  const systemPrompt = injectBotSystemPrompt(messages.filter(m => m.role !== 'system'), skillContext, memoryContext)[0];
+
+  const conversationMessages = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role: m.role,
+      content: normalizeContent(m.content)
+    }));
+
+  let allMessages = [systemPrompt, ...conversationMessages];
+  let iteration = 0;
+  const maxIterations = 3;
+
+  try {
+    while (iteration < maxIterations) {
+      iteration++;
+      console.log(`[wrapper] #${reqId} skill-tools iteration ${iteration}/${maxIterations}`);
+
+      // Call Claude with skill tools available
+      const claudeResponse = await callClaudeNonStreaming(allMessages, SKILL_TOOLS, 'auto');
+
+      if (!claudeResponse.choices || !claudeResponse.choices[0]) {
+        throw new Error('Invalid Claude response structure');
+      }
+
+      const choice = claudeResponse.choices[0];
+      const finishReason = choice.finish_reason;
+      const content = choice.message?.content || '';
+
+      // Case 1: Claude wants to call a tool
+      if (finishReason === 'tool_calls' && choice.message?.tool_calls) {
+        const toolCalls = choice.message.tool_calls;
+        console.log(`[wrapper] #${reqId} skill-tools: ${toolCalls.length} tool_calls: ${toolCalls.map(t => t.function.name).join(', ')}`);
+
+        // Add Claude's response to conversation
+        allMessages.push({
+          role: 'assistant',
+          content,
+          tool_calls: toolCalls
+        });
+
+        // Process each tool call and collect results
+        const toolResults = [];
+        for (const toolCall of toolCalls) {
+          const toolName = toolCall.function.name;
+          const toolArgs = typeof toolCall.function.arguments === 'string' 
+            ? JSON.parse(toolCall.function.arguments) 
+            : toolCall.function.arguments;
+
+          try {
+            console.log(`[wrapper] #${reqId} calling skill: ${toolName} with args: ${JSON.stringify(toolArgs).slice(0, 100)}`);
+            const result = await callSkill(toolName, toolArgs);
+            const resultContent = formatSkillResult(toolName, result);
+            
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content: resultContent
+            });
+          } catch (e) {
+            console.error(`[wrapper] #${reqId} skill error: ${toolName} - ${e.message}`);
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content: `[${toolName} 錯誤] ${e.message}`
+            });
+          }
+        }
+
+        // Add tool results to conversation
+        allMessages.push({
+          role: 'user',
+          content: toolResults
+        });
+
+        // Continue loop to let Claude generate final response
+        continue;
+      }
+
+      // Case 2: Claude generated final response (stop)
+      if (finishReason === 'stop') {
+        const finalContent = content || '無法生成回應，請稍後再試。';
+        console.log(`[wrapper] #${reqId} skill-tools final: ${finalContent.slice(0, 80)}`);
+
+        // Store in memory
+        if (userText && finalContent && finalContent.length > 10) {
+          storeMemory(userText, finalContent);
+        }
+
+        // Send response
+        return sendDirectResponse(reqId, finalContent, wantsStream, res);
+      }
+
+      // Case 3: Unexpected finish reason
+      console.warn(`[wrapper] #${reqId} unexpected finish_reason: ${finishReason}`);
+      const fallbackContent = content || '系統暫時無法處理，請稍後再試。';
+      return sendDirectResponse(reqId, fallbackContent, wantsStream, res);
+    }
+
+    // Max iterations exceeded
+    console.error(`[wrapper] #${reqId} skill-tools max iterations (${maxIterations}) exceeded`);
+    return sendDirectResponse(reqId, '系統達到最大處理次數，請簡化您的請求。', wantsStream, res);
+
+  } catch (e) {
+    console.error(`[wrapper] #${reqId} skill-tools error: ${e.message}`);
+    metrics.errors++;
+    
+    // Fallback: call Claude without tools
+    console.log(`[wrapper] #${reqId} skill-tools fallback to normal Claude`);
+    const fallbackBody = prepareBody(parsedBody, skillContext, memoryContext);
+    if (wantsStream) {
+      streamPassthrough(reqId, fallbackBody, res, skillContext, memoryContext, userText);
+    } else {
+      forwardNonStreaming(reqId, fallbackBody, res, skillContext, memoryContext, userText);
+    }
   }
 }
 
@@ -1481,10 +2061,46 @@ function handleModelUsage(res) {
 
 // ─── Server ────────────────────────────────────────────────────
 
+
+// --- Embeddings proxy to Ollama ---
+function proxyEmbeddingsToOllama(req, res) {
+  let body = '';
+  req.on('data', c => body += c);
+  req.on('end', () => {
+    let parsed;
+    try { parsed = JSON.parse(body); } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'Invalid JSON' } }));
+    }
+    parsed.model = 'nomic-embed-text';
+    const data = JSON.stringify(parsed);
+    const opts = {
+      hostname: 'localhost', port: 11434,
+      path: '/v1/embeddings', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      timeout: 30000
+    };
+    const proxyReq = http.request(opts, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(res);
+    });
+    proxyReq.on('error', (e) => {
+      console.error('[wrapper] embeddings proxy error:', e.message);
+      res.writeHead(502, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Ollama embeddings unavailable: ' + e.message } }));
+    });
+    proxyReq.write(data);
+    proxyReq.end();
+  });
+}
+
 const server = http.createServer((req, res) => {
   // Health endpoint
   if (req.url === '/health' && req.method === 'GET') {
     return handleHealth(res);
+
+
+
   }
 
   // Metrics endpoint
@@ -1495,6 +2111,11 @@ const server = http.createServer((req, res) => {
   // Model usage stats
   if ((req.url === '/metrics/model-usage' || req.url === '/metrics/model') && req.method === 'GET') {
     return handleModelUsage(res);
+  }
+
+  // Embeddings endpoint - proxy to Ollama nomic-embed-text
+  if (req.url === '/v1/embeddings' && req.method === 'POST') {
+    return proxyEmbeddingsToOllama(req, res);
   }
 
   if (!req.url.startsWith('/v1/chat/completions')) {
