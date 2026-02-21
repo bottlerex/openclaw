@@ -1427,7 +1427,14 @@ function forwardNonStreaming(reqId, body, res, skillContext, memoryContext, user
           created: Math.floor(Date.now() / 1000),
           model: parsed.model || 'claude-haiku-4-5',
           choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
-          usage: parsed.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+          usage: (() => {
+            const u = parsed.usage || {};
+            return {
+              prompt_tokens: u.prompt_tokens ?? u.input_tokens ?? 0,
+              completion_tokens: u.completion_tokens ?? u.output_tokens ?? 0,
+              total_tokens: u.total_tokens ?? ((u.prompt_tokens ?? u.input_tokens ?? 0) + (u.completion_tokens ?? u.output_tokens ?? 0))
+            };
+          })()
         };
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response));
