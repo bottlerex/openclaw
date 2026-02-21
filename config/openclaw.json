@@ -21,15 +21,15 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-haiku-4-5"
+        "primary": "openai/claude-haiku-4-5"
       }
     }
   },
   "models": {
     "providers": {
-      "anthropic": {
-        "apiKey": "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",
-        "baseUrl": "https://api.anthropic.com",
+      "openai": {
+        "apiKey": "sk-local-wrapper-not-needed",
+        "baseUrl": "http://host.docker.internal:3457/v1",
         "models": [
           {
             "id": "claude-haiku-4-5",

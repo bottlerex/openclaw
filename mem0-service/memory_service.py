@@ -20,6 +20,9 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("mem0-svc")
+# Reduce mem0 internal logger noise (empty LLM responses → WARNING not ERROR)
+logging.getLogger("mem0.memory.main").setLevel(logging.WARNING)
+
 
 # ── Redis (cache + metrics) ─────────────────────────────────────
 
@@ -122,6 +125,27 @@ def _normalize_results(results) -> list:
         return results
     return []
 
+
+# ── Input validation ────────────────────────────────────────────
+
+import re as _re
+
+_SKIP_PATTERNS = [
+    _re.compile(r"^system:", _re.IGNORECASE),
+    _re.compile(r"^\[?\d{4}-\d{2}-\d{2}"),  # timestamps
+    _re.compile(r"^cron\s*[:(]", _re.IGNORECASE),
+    _re.compile(r"^(hi|hello|hey|你好|嗨|哈囉|早安|晚安)\s*[!.]*$", _re.IGNORECASE),
+]
+
+def _should_skip_input(text: str) -> bool:
+    """Return True if text is too short or matches skip patterns."""
+    if not text or len(text.strip()) < 10:
+        return True
+    for pat in _SKIP_PATTERNS:
+        if pat.search(text.strip()):
+            return True
+    return False
+
 # ── Routes ───────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -141,12 +165,23 @@ async def add_memory(req: AddRequest):
         m = get_memory()
         start = time.time()
 
+        # Extract text for validation
+        input_text = ""
         if req.messages:
-            result = m.add(messages=req.messages, user_id=req.user_id, metadata=req.metadata)
+            input_text = " ".join(m.get("content", "") for m in req.messages if isinstance(m, dict))
         elif req.text:
-            result = m.add(req.text, user_id=req.user_id, metadata=req.metadata)
+            input_text = req.text
         else:
             raise HTTPException(400, "Provide 'messages' or 'text'")
+
+        if _should_skip_input(input_text):
+            log.info(f"add: skipped (input too short or filtered): '{input_text[:50]}'")
+            return {"status": "ok", "result": {"results": []}, "elapsed_seconds": 0, "skipped": True}
+
+        if req.messages:
+            result = m.add(messages=req.messages, user_id=req.user_id, metadata=req.metadata)
+        else:
+            result = m.add(req.text, user_id=req.user_id, metadata=req.metadata)
 
         elapsed = time.time() - start
         added = _normalize_results(result)
