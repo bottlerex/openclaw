@@ -1,0 +1,28 @@
+# Secrets
+.env
+.env.*
+config/openclaw.json
+
+# Devices & credentials
+devices/
+gog-config/
+exec-approvals.json
+
+# Backups
+*.bak
+*.backup
+.backups/
+.backup-*/
+
+# Docker CLI (binary)
+docker-cli/
+
+# Workspace data
+workspace/
+calendar_cache/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store

@@ -7,43 +7,44 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '2.0'
+          cpus: "2.0"
           memory: 2G
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
       - net.ipv6.conf.default.disable_ipv6=1
     environment:
-    - OPENCLAW_CONSENT_MODE=true
-    - OPENCLAW_GATEWAY_TOKEN=openclaw-local-token-2026
-    - GOG_KEYRING_PASSWORD=openclaw2026
-    - GOG_DEFAULT_ACCOUNT=rex.smart@gmail.com
-    - GOOGLE_CLIENT_ID=1082922213484-5cjbaf9co70j5hqu7uhr7o4r22dsd0it.apps.googleusercontent.com
-    - GOOGLE_CLIENT_SECRET=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
-    - GOOGLE_REDIRECT_URI=http://localhost
-    - TOOLS_ALLOW=calendar,gmail,drive,web,file,email
-    - ENABLE_CALENDAR=true
-    - ENABLE_GMAIL=true
-    - ENABLE_DRIVE=true
-    - CALENDAR_CACHE_PATH=/home/node/calendar_cache
-    - SCHEDULE_DAILY_DIGEST=09:00
-    - TIMEZONE=Asia/Taipei
-    - OPENCLAW_PRIMARY_MODEL=openai/claude-haiku-4-5
-    - OPENAI_BASE_URL=http://host.docker.internal:3457/v1
-    - OPENAI_API_KEY=sk-local-wrapper-not-needed
-    - BRAVE_API_KEY=BSABkEen0XsrbxDEZY-WpO4tu-B1DF6
-    group_add:
-    - '0'
-    image: ghcr.io/openclaw/openclaw:latest
+      - OPENCLAW_CONSENT_MODE=false
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+      - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
+      - GOG_DEFAULT_ACCOUNT=${GOG_DEFAULT_ACCOUNT}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - TOOLS_ALLOW=calendar,gmail,drive,web,file,email
+      - ENABLE_CALENDAR=true
+      - ENABLE_GMAIL=true
+      - ENABLE_DRIVE=true
+      - CALENDAR_CACHE_PATH=/home/node/calendar_cache
+      - SCHEDULE_DAILY_DIGEST=09:00
+      - TIMEZONE=Asia/Taipei
+      - OPENCLAW_PRIMARY_MODEL=openai/claude-proxy
+      - OPENAI_BASE_URL=http://host.docker.internal:3457/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BRAVE_API_KEY=${BRAVE_API_KEY}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --dns-result-order=ipv4first
+    image: ghcr.io/openclaw/openclaw:main
     networks:
-    - openclaw-isolated
+      - openclaw-isolated
     ports:
-    - 127.0.0.1:18789:18789
+      - 127.0.0.1:18789:18789
+      - 127.0.0.1:9091:9090
     restart: unless-stopped
     volumes:
-    - ./config:/home/node/.openclaw
-    - ./workspace:/home/node/workspace
-    - ./calendar_cache:/home/node/calendar_cache
-    - /var/run/docker.sock:/var/run/docker.sock
-    - ./docker-cli/docker:/usr/local/bin/docker:ro
-    - ./gog-cli/gog:/usr/local/bin/gog:ro
-    - ./gog-config:/home/node/.config/gogcli
+      - ./config:/home/node/.openclaw
+      - ./workspace:/home/node/workspace
+      - ./calendar_cache:/home/node/calendar_cache
+      - ./gog-cli/gog:/usr/local/bin/gog:ro
+      - ./gog-config:/home/node/.config/gogcli
+    extra_hosts:
+      - host.docker.internal:host-gateway
