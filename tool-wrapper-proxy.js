@@ -177,7 +177,7 @@ function detectFinancialIntent(userText) {
 
 
 const PROJECT_ROUTES = [
-  { keywords: ['taiwan-stock', 'taiwan stock', '台股系統', '股票系統'], dir: '~/Project/active_projects/taiwan-stock-mvp' },
+  { keywords: ['taiwan-stock', 'taiwan stock', '台股系統', '股票系統', '台灣股票', '股票專案', 'stock mvp', 'stock-mvp'], dir: '~/Project/active_projects/taiwan-stock-mvp' },
   { keywords: ['personal-ai', 'personal ai', 'pai', '個人助理', '助理系統'], dir: '~/Project/active_projects/personal-ai-assistant' },
   { keywords: ['openclaw', 'telegram bot', 'bot設定', 'bot 設定'], dir: '~/openclaw' },
   { keywords: ['ai-news', 'ai news', '新聞摘要', '新聞系統'], dir: '~/Project/active_projects/ai-news-digest' },
@@ -1122,6 +1122,7 @@ const INTENT_MAP = {
   'system_info':       { endpoint: '/system/info',     paramsFn: () => ({}), method: 'GET' },
   'git_add':           { endpoint: '/git/add',         paramsFn: (target, extra) => ({ repo: resolveProject(target), files: extra.files || ['.'] }) },
   'git_commit':        { endpoint: '/git/commit',      paramsFn: (target, extra) => ({ repo: resolveProject(target), message: extra.message }) },
+  'project_overview':  { endpoint: '_multi', paramsFn: (target) => ({ repo: resolveProject(target) }), multi: true },
 };
 
 // Container alias mapping
@@ -1261,6 +1262,7 @@ Available intents:
 - run_tests: run project tests
 - show_containers: list all Docker containers
 - system_info: show system info (Claude Code version, models, uptime, status)
+- project_overview: get project overview (status, recent changes, structure) for analysis/review/improvement suggestions
 - git_add: stage files for commit
 - git_commit: commit staged changes
 
@@ -1292,6 +1294,13 @@ If the message doesn't match any intent, respond: {"intent": "unknown"}`;
 }
 
 function formatAgentdResult(endpoint, result) {
+  if (result._multi) {
+    let out = `專案概覽: ${result.repo}\n\n`;
+    out += `📋 Git Status:\n${result.git_status || '(clean)'}\n\n`;
+    out += `📜 最近 Commits:\n${result.git_log}\n`;
+    out += `📁 根目錄檔案:\n${result.files}\n`;
+    return out;
+  }
   if (result.hostname && result.claude_code_version) {
     return `Mac mini (${result.hostname}) 系統資訊:\n- Claude Code: ${result.claude_code_version}\n- Node.js: ${result.node_version}\n- Platform: ${result.platform}/${result.arch}\n- Ollama 模型: ${result.ollama_models}\n- Docker 容器:\n${result.docker_containers}\n- 系統運行: ${result.system_uptime_hours} 小時\n- agentd 運行: ${result.agentd_uptime_seconds} 秒`;
   }
@@ -1323,12 +1332,12 @@ async function executeDevCommand(userMessage, projectDir) {
   try {
     // 2. Parse intent via Ollama
     console.log(`[wrapper] dev-mode: parsing intent via Ollama`);
-    const intent = await parseDevIntent(userMessage);
+    let intent = await parseDevIntent(userMessage);
 
     if (!intent || !INTENT_MAP[intent.intent]) {
-      console.log(`[wrapper] dev-mode: unknown intent: ${JSON.stringify(intent)}`);
-      logDevWork(project, userMessage, (Date.now() - startTime) / 1000, false);
-      return `[dev-mode] 無法識別意圖。支援的操作: ${Object.keys(INTENT_MAP).join(', ')}`;
+      // Fallback: if we're in dev mode with a project, default to project_overview
+      console.log(`[wrapper] dev-mode: unknown intent (${JSON.stringify(intent)}), falling back to project_overview`);
+      intent = { intent: 'project_overview', target: projectNameFromDir(projectDir) };
     }
 
     // 3. Deterministic mapping — intent → endpoint + params
@@ -1337,8 +1346,28 @@ async function executeDevCommand(userMessage, projectDir) {
 
     console.log(`[wrapper] dev-mode: intent=${intent.intent} endpoint=${mapping.endpoint} params=${JSON.stringify(params)}`);
 
-    // 4. Call agentd
-    const result = await callAgentd(mapping.endpoint, params, null, mapping.method);
+    // 4. Call agentd (multi-intent gathers multiple pieces of info)
+    let result;
+    if (mapping.multi) {
+      const repo = params.repo;
+      console.log(`[wrapper] multi-intent: gathering data for ${repo}`);
+      const [gitLog, gitStatus, fileList] = await Promise.all([
+        callAgentd('/git/log', { repo, count: 10 }).catch(e => { console.error('[wrapper] multi git/log error:', e.message); return { error: e.message }; }),
+        callAgentd('/git/status', { repo }).catch(e => { console.error('[wrapper] multi git/status error:', e.message); return { error: e.message }; }),
+        callAgentd('/fs/list', { path: repo }).catch(e => { console.error('[wrapper] multi fs/list error:', e.message); return { error: e.message }; }),
+      ]);
+      console.log('[wrapper] multi-intent results:', JSON.stringify({log: !!gitLog.log, status: !!gitStatus.status, entries: !!fileList.entries}));
+      result = {
+        _multi: true,
+        repo,
+        git_log: gitLog.log || gitLog.error || '',
+        git_status: gitStatus.status || gitStatus.error || '(clean)',
+        files: fileList.entries ? fileList.entries.map(e => e.name).join(', ') : (fileList.error || JSON.stringify(fileList)),
+        job_id: gitLog.job_id || 'multi',
+      };
+    } else {
+      result = await callAgentd(mapping.endpoint, params, null, mapping.method);
+    }
     const elapsed = (Date.now() - startTime) / 1000;
 
     // 5. Format result

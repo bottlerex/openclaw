@@ -260,7 +260,7 @@ routes['POST /fs/list'] = async (body) => {
   if (!isAllowedPath(body.path)) throw { status: 403, message: 'path not allowed' };
 
   const entries = fs.readdirSync(body.path, { withFileTypes: true });
-  return entries.map(e => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }));
+  return { path: body.path, entries: entries.map(e => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' })) };
 };
 
 // POST /git/log
