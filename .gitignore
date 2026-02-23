@@ -63,3 +63,5 @@ gog-cli/
 GOOGLE_WORKSPACE_SETUP.md
 SKILL_RETRY_CONFIG.md
 force-ipv4.cjs
+healthcheck.sh
+scripts/
