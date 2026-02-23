@@ -108,6 +108,9 @@ const DEV_ACTION_WORDS = [
   '部署', '建構', '編譯', '修 bug', '找 bug',
   '進行改善', '直接改善', '幫我改',
   '寫一個', '寫個', '加一個', '加個', '新增功能', '改這個',
+  // 確認/執行類（follow-up 常見）
+  '執行', '做', '做吧', '好', '繼續', '開始', '進行', '處理',
+  'do it', 'go', 'execute', 'proceed', 'yes', 'ok',
   // 操作類（英文）
   'check', 'analyze', 'optimize', 'improve', 'fix', 'refactor',
   'implement', 'develop', 'run test', 'run tests', 'deploy', 'build',
@@ -1392,15 +1395,21 @@ function analyzeWithHaiku(userQuestion, projectData) {
 - 只根據提供的資料分析，不猜測
 - 給出具體可行的建議（最多 5 條）
 - 不要重複貼出原始資料
-- 不要問「需要我做什麼」「哪個方式方便」，直接給建議和可執行的指令
-- 每條可自動執行的建議，用 Telegram 指令格式:
+- 每條可自動執行的建議，用 👉 格式（用戶複製發送即可自動執行）:
   👉 commit openclaw 的改動
   👉 重啟 openclaw 容器
   👉 跑測試 taiwan-stock
   👉 看 openclaw 的 logs
   👉 查看 taiwan-stock git diff
 - 需人工判斷的標明「需手動處理」
-- 不要說「我可以幫你」「要不要我」，直接列出指令讓用戶發送`;
+
+嚴格禁止（違反即失敗）:
+- 禁止問「需要我幫你嗎」「要不要我執行」「需要我做什麼」「要不要我」「哪個方式方便」
+- 禁止問「需要我幫你執行上面的指令嗎」
+- 禁止說「我可以幫你」「如果你需要」「等待你的指示」
+- 禁止要求用戶提供路徑、URL、SSH 權限
+- 禁止結尾用疑問句
+- 直接列出建議和 👉 指令，不要問任何問題`;
 
     const body = JSON.stringify({
       model: 'claude-haiku-4-5',
