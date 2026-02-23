@@ -66,3 +66,4 @@ force-ipv4.cjs
 healthcheck.sh
 scripts/
 certs/
+tool-wrapper-proxy.js.v*
