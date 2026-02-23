@@ -32,8 +32,11 @@ const ALLOWED_PATHS = [
 ];
 
 // Container whitelist
+// v10.3: Updated to match all running containers
 const ALLOWED_CONTAINERS = new Set([
   'openclaw-agent', 'postgres', 'redis', 'backend', 'grafana', 'prometheus',
+  'personal-ai-gateway', 'rex-ai',
+  'taiwan-stock-backend', 'taiwan-stock-grafana', 'taiwan-stock-prometheus', 'taiwan-stock-postgres', 'taiwan-stock-redis',
 ]);
 
 // ─── Token Loading ───────────────────────────────────────────────

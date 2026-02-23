@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// OpenClaw Tool Wrapper Proxy v10.2
+// OpenClaw Tool Wrapper Proxy v10.3
+// v10.3: systematic fix — unified intent routing, persistent state, Haiku capability injection
 // v10.2: mac-agentd integration — structured host execution replacing claude -p
 // v10.1: GLM-4.7-Flash Ollama-first routing with Claude fallback
 // v10: Mem0 memory layer — persistent cross-session memory via mem0-service (:8002)
@@ -19,7 +20,7 @@ const UPSTREAM_PORT = 3456;
 const LISTEN_PORT = 3457;
 const SKILL_API_PORT = 8000;
 const MEM0_PORT = 8002;
-const VERSION = '10.1.0';
+const VERSION = '10.3.0';
 const startedAt = Date.now();
 
 // ─── Metrics ─────────────────────────────────────────────────────
@@ -92,34 +93,56 @@ function checkRateLimit(type) {
 
 // ─── Dev Mode Configuration ──────────────────────────────────────
 
-// Strong signals: trigger dev mode regardless of project keyword
-const STRONG_DEV_KEYWORDS = [
-  // Explicit dev commands (Chinese)
-  '實作', '開發', '重構', '修復', '寫一個', '寫個',
-  '加一個', '加個', '新增功能', '改一下', '改這個',
-  '跑測試', '執行測試', '測試一下',
-  '部署', '建構', '編譯',
-  '修 bug', '找 bug', '程式碼審查',
-  '改善', '進行改善', '直接改善', '幫我改',
-  '提交', 'commit', '重啟容器',
-  // Explicit dev commands (English)
-  'implement', 'develop', 'refactor', 'fix bug', 'find bug',
-  'run test', 'run tests', 'write code', 'create function',
-  'add feature', 'debug', 'review code',
+// v10.3: Unified DEV_ACTION_WORDS (merged strong+weak, no longer split)
+const DEV_ACTION_WORDS = [
+  // 操作類（中文）
+  '查看', '看一下', '看看', '幫我看', '檢查', '分析', '優化', '改善', '改一下',
+  '修復', '修', '重構', '實作', '開發', '寫', '加', '新增',
+  '提交', 'commit', '推送', 'push',
+  '跑測試', '測試', '執行測試',
+  '重啟', '重啟容器', 'restart',
+  '看 log', 'logs', '日誌',
+  '狀態', 'status', 'diff',
+  '檔案', '讀取', '列出',
+  '修改', '清理', '效能優化', '讀檔案', '程式碼審查',
+  '部署', '建構', '編譯', '修 bug', '找 bug',
+  '進行改善', '直接改善', '幫我改',
+  '寫一個', '寫個', '加一個', '加個', '新增功能', '改這個',
+  // 操作類（英文）
+  'check', 'analyze', 'optimize', 'improve', 'fix', 'refactor',
+  'implement', 'develop', 'run test', 'run tests', 'deploy', 'build',
+  'write code', 'create function', 'add feature', 'debug', 'review code',
+  'modify', 'read file', 'check code',
 ];
 
 // Last dev-mode project (for follow-up messages without project keyword)
+// v10.3: Persisted to /tmp/mac-agentd/last-dev-project.json
 let lastDevProject = null;
+const LAST_PROJECT_FILE = '/tmp/mac-agentd/last-dev-project.json';
 
-// Weak signals: only trigger dev mode when combined with a project keyword
-const WEAK_DEV_KEYWORDS = [
-  // Chinese
-  '修改', '讀取', '看一下', '查看', '讀檔案',
-  '檢查', '優化', '效能優化', '清理',
-  '分析', '看看', '幫我看',
-  // English
-  'modify', 'read file', 'check code', 'optimize', 'analyze',
-];
+function saveLastProject(dir) {
+  lastDevProject = dir;
+  try {
+    const dirPath = path.dirname(LAST_PROJECT_FILE);
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    fs.writeFileSync(LAST_PROJECT_FILE, JSON.stringify({ dir, ts: Date.now() }));
+  } catch (e) {
+    console.error(`[wrapper] save lastProject error: ${e.message}`);
+  }
+}
+
+function loadLastProject() {
+  try {
+    const data = JSON.parse(fs.readFileSync(LAST_PROJECT_FILE, 'utf8'));
+    if (Date.now() - data.ts < 3600000) { // 1 hour expiry
+      lastDevProject = data.dir;
+      console.log(`[wrapper] restored lastDevProject: ${data.dir}`);
+    }
+  } catch (_) {}
+}
+
+// Load on startup
+loadLastProject();
 
 
 // ─── Financial Agent Routing ──────────────────────────────────
@@ -1039,17 +1062,12 @@ async function handleGmailBatchDelete(reqId, userText, wantsStream, res) {
 
 // ─── Dev Mode Detection (v9: Smart Intent) ───────────────────────
 
+// v10.3: Simplified detectDevIntent — unified logic
 function detectDevIntent(text) {
   if (!text) return null;
   const lower = text.toLowerCase();
 
-  // Check for strong signal (triggers dev mode even without project keyword)
-  const hasStrongSignal = STRONG_DEV_KEYWORDS.some(kw => lower.includes(kw));
-
-  // Check for weak signal
-  const hasWeakSignal = WEAK_DEV_KEYWORDS.some(kw => lower.includes(kw));
-
-  // Check for project keyword
+  // 1. Check for explicit project keyword → dev mode
   let projectDir = null;
   for (const route of PROJECT_ROUTES) {
     if (route.keywords.some(kw => lower.includes(kw))) {
@@ -1058,18 +1076,16 @@ function detectDevIntent(text) {
     }
   }
 
-  // Decision logic:
-  // Strong signal → always dev mode (use project dir if found, else generic)
-  // Weak signal + project keyword → dev mode with specific project
-  // Weak signal alone → NOT dev mode (normal chat)
-  if (hasStrongSignal) {
-    return { prompt: text, projectDir: projectDir || lastDevProject || '~/Project/active_projects', signal: 'strong' };
-  }
-  if (hasWeakSignal && projectDir) {
-    return { prompt: text, projectDir, signal: 'weak+project' };
+  // 2. No project keyword → check if dev action + lastDevProject (follow-up)
+  if (!projectDir) {
+    const hasDevAction = DEV_ACTION_WORDS.some(kw => lower.includes(kw));
+    if (hasDevAction && lastDevProject) {
+      return { prompt: text, projectDir: lastDevProject, signal: 'follow-up' };
+    }
+    return null; // not a dev intent
   }
 
-  return null;
+  return { prompt: text, projectDir, signal: 'project-keyword' };
 }
 
 function resolveHome(dir) {
@@ -1095,6 +1111,14 @@ function logDevWork(project, prompt, durationSec, success) {
     if (err) console.error(`[wrapper] wt-log error: ${err.message}`);
     else console.log(`[wrapper] wt-log: ${project}/code dev-mode recorded`);
   });
+}
+
+// ─── Unified Error Formatter (v10.3) ─────────────────────────────
+
+function formatDevError(category, message, hint) {
+  let out = `[${category}] ${message}`;
+  if (hint) out += `\n提示: ${hint}`;
+  return out;
 }
 
 // ─── mac-agentd Integration ───────────────────────────────────
@@ -1128,9 +1152,12 @@ const INTENT_MAP = {
   'git_add':           { endpoint: '/git/add',         paramsFn: (target, extra) => ({ repo: resolveProject(target), files: extra.files || ['.'] }) },
   'git_commit':        { endpoint: '_commit_flow',     paramsFn: (target, extra) => ({ repo: resolveProject(target), message: extra.message || 'chore: commit pending changes via OpenClaw' }), multi: true },
   'project_overview':  { endpoint: '_multi', paramsFn: (target) => ({ repo: resolveProject(target) }), multi: true },
+  'docker_overview':   { endpoint: '_multi_docker', paramsFn: () => ({}), multi: true },
+  'test_and_analyze':  { endpoint: '_multi_test',   paramsFn: (target) => ({ repo: resolveProject(target) }), multi: true },
 };
 
 // Container alias mapping
+// v10.3: Extended aliases for all containers
 const CONTAINER_ALIASES = {
   'openclaw': 'openclaw-agent',
   'openclaw-bot': 'openclaw-agent',
@@ -1141,9 +1168,14 @@ const CONTAINER_ALIASES = {
   'prometheus': 'taiwan-stock-prometheus',
   'pg': 'postgres',
   'db': 'postgres',
+  'database': 'postgres',
   'pai': 'personal-ai-gateway',
   'personal-ai': 'personal-ai-gateway',
   'rex-ai': 'rex-ai',
+  'dashboard': 'rex-ai',
+  'redis': 'taiwan-stock-redis',
+  'stock-pg': 'taiwan-stock-postgres',
+  'stock-redis': 'taiwan-stock-redis',
 };
 
 function resolveContainer(name) {
@@ -1250,35 +1282,49 @@ setInterval(async () => {
   }
 }, 60000);
 
-// Parse intent from user message using Ollama
+// v10.3: Parse intent from user message using Ollama — improved prompt with few-shot
 async function parseDevIntent(userMessage) {
-  const prompt = `Analyze this user message and extract the intent for a development tool.
-Output ONLY valid JSON, no explanation.
+  const systemPrompt = `你是意圖分類器。根據用戶訊息，輸出 JSON。只輸出 JSON，不要解釋。
 
-Available intents:
-- show_git_log: view git commit history
-- show_git_status: check git working tree status
-- show_git_diff: view code changes
-- read_file: read a specific file
-- write_file: write content to a file
-- list_files: list directory contents
-- restart_container: restart a Docker container
-- show_logs: view Docker container logs
-- run_tests: run project tests
-- show_containers: list all Docker containers
-- system_info: show system info (Claude Code version, models, uptime, status)
-- project_overview: get project overview (status, recent changes, structure) for analysis/review/improvement suggestions
-- git_add: stage files for commit
-- git_commit: commit staged changes
+可用意圖:
+- show_git_log: 查看 git 提交歷史
+- show_git_status: 查看 git 工作區狀態
+- show_git_diff: 查看程式碼變更
+- read_file: 讀取特定檔案（extra.path 必填）
+- write_file: 寫入檔案（extra.path + extra.content 必填）
+- list_files: 列出目錄內容
+- restart_container: 重啟 Docker 容器（target = 容器名）
+- show_logs: 查看 Docker 容器日誌（target = 容器名）
+- run_tests: 執行測試
+- show_containers: 列出所有 Docker 容器
+- system_info: 系統資訊
+- docker_overview: Docker 容器總覽（列出所有容器 + 每個容器最新日誌 → 分析）
+- test_and_analyze: 執行測試 + 分析結果
+- project_overview: 專案總覽（git status + log + 檔案列表 → 分析改善建議）
+- git_add: 暫存檔案
+- git_commit: 提交改動
+- none: 不是開發操作（閒聊、問問題）
 
-User message: "${userMessage}"
+格式: {"intent": "<名稱>", "target": "<專案或容器>", "extra": {}}`;
 
-Respond with JSON: {"intent": "<intent_name>", "target": "<project_or_container_name>", "extra": {<optional_fields>}}
-If the message doesn't match any intent, respond: {"intent": "unknown"}`;
+  const fewShot = `範例:
+"查看 openclaw 的 git log" → {"intent":"show_git_log","target":"openclaw"}
+"幫我改善" → {"intent":"project_overview","target":""}
+"重啟 openclaw 容器" → {"intent":"restart_container","target":"openclaw"}
+"跑測試 taiwan-stock" → {"intent":"test_and_analyze","target":"taiwan-stock"}
+"commit openclaw 的改動" → {"intent":"git_commit","target":"openclaw"}
+"Docker 容器狀態" → {"intent":"docker_overview","target":""}
+"看 openclaw 的 logs" → {"intent":"show_logs","target":"openclaw"}
+"查看 taiwan-stock git diff" → {"intent":"show_git_diff","target":"taiwan-stock"}
+"今天天氣如何" → {"intent":"none","target":""}
+"你好" → {"intent":"none","target":""}`;
 
   try {
     const ollamaResult = await ollamaRouter.tryOllamaChat(
-      [{ role: 'user', content: prompt }],
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `${fewShot}\n\n用戶訊息: "${userMessage}"` },
+      ],
       { model: 'qwen2.5-coder:7b' }
     );
     if (!ollamaResult.success) {
@@ -1286,11 +1332,10 @@ If the message doesn't match any intent, respond: {"intent": "unknown"}`;
       return null;
     }
     const text = (ollamaResult.content || '').trim();
-    // Extract JSON from response (may be wrapped in markdown)
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const jsonMatch = text.match(/\{[\s\S]*?\}/);
     if (!jsonMatch) return null;
     const parsed = JSON.parse(jsonMatch[0]);
-    if (!parsed.intent || parsed.intent === 'unknown') return null;
+    if (!parsed.intent || parsed.intent === 'unknown' || parsed.intent === 'none') return null;
     return parsed;
   } catch (e) {
     console.error(`[wrapper] intent parsing error: ${e.message}`);
@@ -1309,7 +1354,7 @@ function formatAgentdResult(endpoint, result) {
   if (result.hostname && result.claude_code_version) {
     return `Mac mini (${result.hostname}) 系統資訊:\n- Claude Code: ${result.claude_code_version}\n- Node.js: ${result.node_version}\n- Platform: ${result.platform}/${result.arch}\n- Ollama 模型: ${result.ollama_models}\n- Docker 容器:\n${result.docker_containers}\n- 系統運行: ${result.system_uptime_hours} 小時\n- agentd 運行: ${result.agentd_uptime_seconds} 秒`;
   }
-  if (result.error) return `[error] ${result.error}`;
+  if (result.error) return formatDevError('agentd', result.error);
   if (result.log) return result.log;
   if (result.status !== undefined && typeof result.status === 'string') return result.status || '(clean)';
   if (result.diff) return result.diff || '(no changes)';
@@ -1327,23 +1372,35 @@ function formatAgentdResult(endpoint, result) {
 
 function analyzeWithHaiku(userQuestion, projectData) {
   return new Promise((resolve, reject) => {
+    // v10.3: Full capability list injection
     const systemPrompt = `你是 Mac mini 基礎設施顧問，透過 Telegram bot 管理 Mac mini。
 
-重要: 你已經能存取專案檔案和執行操作。不要問用戶提供路徑、URL、或任何存取方式。資料已經蒐集好了，直接分析並給建議。
+你可以直接執行的操作（用戶在 Telegram 發送指令即可觸發）:
+- 查看 [專案] 的 git log/status/diff
+- 提交 [專案] 的改動 (commit)
+- 重啟 [容器名] 容器
+- 看 [容器名] 的 logs
+- 跑 [專案] 的測試
+- 查看 Docker 容器列表
+- 查看系統資訊
+
+可管理的專案: openclaw, taiwan-stock, personal-ai, ai-news, stationery, sales-visit, channels
+可管理的容器: openclaw-agent, postgres, redis, backend, grafana, prometheus, personal-ai-gateway, rex-ai, taiwan-stock-backend
 
 規則:
 - 繁體中文，簡短直接
 - 只根據提供的資料分析，不猜測
 - 給出具體可行的建議（最多 5 條）
 - 不要重複貼出原始資料
-- 不要問「需要我做什麼」「哪個方式方便」之類的問題，直接給建議
-- 每條建議如果可以自動執行，附上 Telegram 指令（用戶發送即可執行）:
-  👉 commit 台灣股票的改動
+- 不要問「需要我做什麼」「哪個方式方便」，直接給建議和可執行的指令
+- 每條可自動執行的建議，用 Telegram 指令格式:
+  👉 commit openclaw 的改動
   👉 重啟 openclaw 容器
   👉 跑測試 taiwan-stock
   👉 看 openclaw 的 logs
   👉 查看 taiwan-stock git diff
-- 如果建議需要人工判斷（如架構調整、刪除檔案），標明「需手動處理」`;
+- 需人工判斷的標明「需手動處理」
+- 不要說「我可以幫你」「要不要我」，直接列出指令讓用戶發送`;
 
     const body = JSON.stringify({
       model: 'claude-haiku-4-5',
@@ -1400,7 +1457,7 @@ async function executeDevCommand(userMessage, projectDir) {
   if (!agentdHealthy) {
     console.log('[wrapper] agentd unavailable, returning read-only fallback');
     logDevWork(project, userMessage, 0, false);
-    return '[dev-mode] mac-agentd 服務暫時不可用。請稍後再試或在 host 上檢查服務狀態。';
+    return formatDevError('agentd', 'mac-agentd 服務暫時不可用', '在 host 上執行: launchctl list | grep agentd');
   }
 
   try {
@@ -1409,9 +1466,13 @@ async function executeDevCommand(userMessage, projectDir) {
     let intent = await parseDevIntent(userMessage);
 
     if (!intent || !INTENT_MAP[intent.intent]) {
-      // Fallback: if we're in dev mode with a project, default to project_overview
+      // v10.3: Layered fallback — try project_overview, not blindly default
       console.log(`[wrapper] dev-mode: unknown intent (${JSON.stringify(intent)}), falling back to project_overview`);
       intent = { intent: 'project_overview', target: projectNameFromDir(projectDir) };
+    } else if (intent.intent === 'none') {
+      // Ollama explicitly said "not a dev command" — exit dev mode
+      console.log(`[wrapper] dev-mode: Ollama classified as non-dev, exiting dev mode`);
+      return null;
     }
 
     // 3. Deterministic mapping — intent → endpoint + params
@@ -1433,7 +1494,7 @@ async function executeDevCommand(userMessage, projectDir) {
       if (addResult.error) {
         const elapsed = (Date.now() - startTime) / 1000;
         logDevWork(project, userMessage, elapsed, false);
-        return `[commit error] git add failed: ${addResult.error}`;
+        return formatDevError('commit', `git add 失敗: ${addResult.error}`, '確認專案路徑正確，且有可追蹤的檔案');
       }
 
       // Step 2: git commit
@@ -1444,17 +1505,68 @@ async function executeDevCommand(userMessage, projectDir) {
         logDevWork(project, userMessage, elapsed, false);
         // Provide helpful message for common failures
         if (commitResult.error.includes('secret') || commitResult.error.includes('Potential secret')) {
-          return `[commit blocked] Pre-commit hook 偵測到 secret，已阻止提交。\n需要手動處理: 從 staged files 移除含有密鑰的檔案，或將密鑰改用環境變數。`;
+          return formatDevError('commit', 'Pre-commit hook 偵測到密鑰，已阻止提交', '從 staged files 移除含密鑰的檔案，或改用環境變數');
         }
         if (commitResult.error.includes('nothing to commit')) {
-          return `沒有需要提交的改動（所有修改可能是 untracked 檔案，需要先 git add）`;
+          return formatDevError('commit', '沒有需要提交的改動', '可能是 untracked 檔案，試試: git add <檔名> 後再 commit');
         }
-        return `[commit error] ${commitResult.error}`;
+        return formatDevError('commit', commitResult.error);
       }
 
       console.log(`[wrapper] commit-flow: done in ${elapsed.toFixed(1)}s`);
       logDevWork(project, userMessage, elapsed, true);
       return `commit 完成:\n${commitResult.output || 'OK'}`;
+    }
+
+    // v10.3: docker_overview — list containers + tail logs for each running one
+    if (mapping.multi && mapping.endpoint === '_multi_docker') {
+      console.log('[wrapper] multi-intent: docker_overview');
+      const psResult = await callAgentd('/docker/ps', {}).catch(e => ({ error: e.message }));
+      const containerLines = (psResult.containers || '').trim().split('\n').filter(Boolean);
+      let logsData = '';
+      // Get logs for each running container (tail 10 lines each)
+      for (const line of containerLines.slice(0, 10)) {
+        const containerName = line.split('\t')[0];
+        if (!containerName) continue;
+        try {
+          const logResult = await callAgentd('/docker/logs', { container: containerName, tail: 10 });
+          logsData += `\n--- ${containerName} ---\n${(logResult.logs || '').slice(0, 500)}\n`;
+        } catch (_) {
+          logsData += `\n--- ${containerName} --- (logs unavailable)\n`;
+        }
+      }
+      const formatted = `Docker 容器列表:\n${psResult.containers || psResult.error || '(empty)'}\n\n最新日誌:\n${logsData}`;
+      console.log('[wrapper] docker_overview: sending to Haiku for analysis');
+      try {
+        const analysis = await analyzeWithHaiku(userMessage, formatted);
+        const elapsed = (Date.now() - startTime) / 1000;
+        logDevWork(project, userMessage, elapsed, true);
+        return analysis;
+      } catch (e) {
+        const elapsed = (Date.now() - startTime) / 1000;
+        logDevWork(project, userMessage, elapsed, true);
+        return formatted;
+      }
+    }
+
+    // v10.3: test_and_analyze — run tests + Haiku analysis
+    if (mapping.multi && mapping.endpoint === '_multi_test') {
+      const repo = params.repo;
+      console.log(`[wrapper] multi-intent: test_and_analyze for ${repo}`);
+      const testResult = await callAgentd('/project/test', { repo }, 120000).catch(e => ({ error: e.message, ok: false }));
+      const testOutput = testResult.output || testResult.error || testResult.summary || 'no output';
+      const formatted = `測試結果 (${repo}):\n${testOutput}`;
+      console.log('[wrapper] test_and_analyze: sending to Haiku for analysis');
+      try {
+        const analysis = await analyzeWithHaiku(userMessage, formatted);
+        const elapsed = (Date.now() - startTime) / 1000;
+        logDevWork(project, userMessage, elapsed, true);
+        return analysis;
+      } catch (e) {
+        const elapsed = (Date.now() - startTime) / 1000;
+        logDevWork(project, userMessage, elapsed, true);
+        return formatted;
+      }
     }
 
     if (mapping.multi) {
@@ -1505,7 +1617,7 @@ async function executeDevCommand(userMessage, projectDir) {
     const elapsed = (Date.now() - startTime) / 1000;
     console.error(`[wrapper] dev-mode error: ${e.message}`);
     logDevWork(project, userMessage, elapsed, false);
-    return `[dev-mode error] ${e.message}`;
+    return formatDevError('agentd', e.message, '試試: 查看 openclaw 的 git log / 重啟 openclaw 容器');
   }
 }
 
@@ -1982,10 +2094,10 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   if (devIntent && isAllowedPath(devIntent.projectDir)) {
     if (!checkRateLimit('dev')) {
       console.log(`[wrapper] #${reqId} DEV RATE LIMITED`);
-      skillContext = '[dev-mode] 請求過於頻繁，請等待幾分鐘後再試 (上限: 10次/5分鐘)';
+      skillContext = formatDevError('timeout', '請求過於頻繁', '等待幾分鐘後再試 (上限: 10次/5分鐘)');
     } else {
       console.log(`[wrapper] #${reqId} DEV MODE [${devIntent.signal}]: project=${devIntent.projectDir}`);
-      lastDevProject = devIntent.projectDir;
+      saveLastProject(devIntent.projectDir);
       metrics.devMode++;
       try {
         const output = await executeDevCommand(devIntent.prompt, devIntent.projectDir);
@@ -1995,12 +2107,12 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       } catch (e) {
         console.error(`[wrapper] #${reqId} dev error: ${e.message}`);
         metrics.errors++;
-        skillContext = `[dev-mode 錯誤] ${e.message}`;
+        skillContext = formatDevError('agentd', e.message);
       }
     }
   } else if (devIntent && !isAllowedPath(devIntent.projectDir)) {
     console.log(`[wrapper] #${reqId} dev BLOCKED: path not allowed: ${devIntent.projectDir}`);
-    skillContext = `[dev-mode] 路徑不在白名單中: ${devIntent.projectDir}`;
+    skillContext = formatDevError('permission', `路徑不在白名單中: ${devIntent.projectDir}`, '允許的路徑: ~/Project/active_projects, ~/openclaw');
   }
 
   // Priority 2: CLI tool routes (summarize, gh)
@@ -2378,8 +2490,7 @@ function handleHealth(res) {
     skill_api: `localhost:${SKILL_API_PORT}`,
     mem0_api: `localhost:${MEM0_PORT}`,
     projects: PROJECT_ROUTES.length,
-    strong_keywords: STRONG_DEV_KEYWORDS.length,
-    weak_keywords: WEAK_DEV_KEYWORDS.length,
+    action_words: DEV_ACTION_WORDS.length,
   };
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(health, null, 2));
@@ -2594,7 +2705,7 @@ server.listen(LISTEN_PORT, '0.0.0.0', () => {
   console.log(`[wrapper] Mem0 API: localhost:${MEM0_PORT}`);
   console.log(`[wrapper] Skills: ${SKILL_ROUTES.map(r => r.name).join(', ')}`);
   console.log(`[wrapper] CLI tools: ${CLI_ROUTES.map(r => r.name).join(', ')}`);
-  console.log(`[wrapper] Dev mode: ${STRONG_DEV_KEYWORDS.length} strong + ${WEAK_DEV_KEYWORDS.length} weak keywords, ${PROJECT_ROUTES.length} projects`);
+  console.log(`[wrapper] Dev mode v10.3: ${DEV_ACTION_WORDS.length} action words, ${PROJECT_ROUTES.length} projects`);
   console.log(`[wrapper] Dev tools: ${DEV_TOOLS}`);
   console.log(`[wrapper] Dev timeout: ${DEV_TIMEOUT_MS / 1000}s, max output: ${DEV_MAX_OUTPUT} chars`);
   console.log(`[wrapper] Rate limits: dev=${rateLimits.dev.max}/5min, skill=${rateLimits.skill.max}/min`);
