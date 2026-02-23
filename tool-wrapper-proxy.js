@@ -1327,20 +1327,23 @@ function formatAgentdResult(endpoint, result) {
 
 function analyzeWithHaiku(userQuestion, projectData) {
   return new Promise((resolve, reject) => {
-    const systemPrompt = `你是 Mac mini 基礎設施顧問。根據蒐集到的專案資料，回答用戶問題。
+    const systemPrompt = `你是 Mac mini 基礎設施顧問，透過 Telegram bot 管理 Mac mini。
+
+重要: 你已經能存取專案檔案和執行操作。不要問用戶提供路徑、URL、或任何存取方式。資料已經蒐集好了，直接分析並給建議。
+
 規則:
 - 繁體中文，簡短直接
 - 只根據提供的資料分析，不猜測
 - 給出具體可行的建議（最多 5 條）
 - 不要重複貼出原始資料
-- 每條建議後面附上「可直接發送的 Telegram 指令」，格式用 👉 開頭
-- 可用指令範例:
-  commit 台灣股票的改動 → git commit
-  重啟 openclaw 容器 → docker restart
-  跑測試 taiwan-stock → 執行測試
-  看 openclaw 的 logs → 容器日誌
-  查看 openclaw git diff → 程式碼差異
-- 如果建議需要人工判斷（如架構調整），標明「需手動處理」不附指令`;
+- 不要問「需要我做什麼」「哪個方式方便」之類的問題，直接給建議
+- 每條建議如果可以自動執行，附上 Telegram 指令（用戶發送即可執行）:
+  👉 commit 台灣股票的改動
+  👉 重啟 openclaw 容器
+  👉 跑測試 taiwan-stock
+  👉 看 openclaw 的 logs
+  👉 查看 taiwan-stock git diff
+- 如果建議需要人工判斷（如架構調整、刪除檔案），標明「需手動處理」`;
 
     const body = JSON.stringify({
       model: 'claude-haiku-4-5',
