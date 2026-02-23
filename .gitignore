@@ -65,3 +65,4 @@ SKILL_RETRY_CONFIG.md
 force-ipv4.cjs
 healthcheck.sh
 scripts/
+certs/
