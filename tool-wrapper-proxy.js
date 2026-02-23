@@ -100,11 +100,16 @@ const STRONG_DEV_KEYWORDS = [
   '跑測試', '執行測試', '測試一下',
   '部署', '建構', '編譯',
   '修 bug', '找 bug', '程式碼審查',
+  '改善', '進行改善', '直接改善', '幫我改',
+  '提交', 'commit', '重啟容器',
   // Explicit dev commands (English)
   'implement', 'develop', 'refactor', 'fix bug', 'find bug',
   'run test', 'run tests', 'write code', 'create function',
   'add feature', 'debug', 'review code',
 ];
+
+// Last dev-mode project (for follow-up messages without project keyword)
+let lastDevProject = null;
 
 // Weak signals: only trigger dev mode when combined with a project keyword
 const WEAK_DEV_KEYWORDS = [
@@ -1058,7 +1063,7 @@ function detectDevIntent(text) {
   // Weak signal + project keyword → dev mode with specific project
   // Weak signal alone → NOT dev mode (normal chat)
   if (hasStrongSignal) {
-    return { prompt: text, projectDir: projectDir || '~/Project/active_projects', signal: 'strong' };
+    return { prompt: text, projectDir: projectDir || lastDevProject || '~/Project/active_projects', signal: 'strong' };
   }
   if (hasWeakSignal && projectDir) {
     return { prompt: text, projectDir, signal: 'weak+project' };
@@ -1942,6 +1947,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       skillContext = '[dev-mode] 請求過於頻繁，請等待幾分鐘後再試 (上限: 10次/5分鐘)';
     } else {
       console.log(`[wrapper] #${reqId} DEV MODE [${devIntent.signal}]: project=${devIntent.projectDir}`);
+      lastDevProject = devIntent.projectDir;
       metrics.devMode++;
       try {
         const output = await executeDevCommand(devIntent.prompt, devIntent.projectDir);
