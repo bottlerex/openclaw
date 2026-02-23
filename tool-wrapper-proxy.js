@@ -2104,22 +2104,72 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   }
 
 
-  // Priority 0.9: Short message context injection
-  // When user sends a short message (≤10 chars), build conversation context
-  // so Ollama intent parser can understand what the user is referring to
+  // Priority 0.9: Follow-up execution
+  // When user sends a short confirmation, extract 👉 commands from conversation
+  // history and execute them directly — no Ollama, fully deterministic
+  const CONFIRM_WORDS = ['執行', '做', '好', '繼續', '開始', '進行', '處理', 'do', 'go', 'execute', 'proceed', 'yes', 'ok'];
+  const lowerTrimmed = userText.toLowerCase().trim();
+  const isConfirm = lowerTrimmed.length <= 15 && CONFIRM_WORDS.some(w => lowerTrimmed.includes(w));
+  const wantsAll = lowerTrimmed.includes('全部') || lowerTrimmed.includes('all') || lowerTrimmed.includes('都');
+
+  if (isConfirm && msgs.length >= 2) {
+    // Extract all 👉 commands from conversation history
+    const suggestions = [];
+    for (const m of [...msgs].reverse()) {
+      if (m.role !== 'assistant') continue;
+      const text = normalizeContent(m.content);
+      const matches = text.match(/👉\s*(.+)/g);
+      if (matches) {
+        for (const match of matches) {
+          suggestions.push(match.replace(/^👉\s*/, '').trim());
+        }
+        break; // use the most recent assistant message with 👉
+      }
+    }
+
+    if (suggestions.length > 0) {
+      if (wantsAll) {
+        // Execute all suggestions sequentially
+        console.log(`[wrapper] #${reqId} EXEC ALL: ${suggestions.length} commands`);
+        const results = [];
+        for (const cmd of suggestions) {
+          console.log(`[wrapper] #${reqId} EXEC: "${cmd}"`);
+          const cmdDevIntent = detectDevIntent(cmd);
+          if (cmdDevIntent && isAllowedPath(cmdDevIntent.projectDir)) {
+            saveLastProject(cmdDevIntent.projectDir);
+            metrics.devMode++;
+            try {
+              const output = await executeDevCommand(cmd, cmdDevIntent.projectDir, null);
+              results.push(`✓ ${cmd}\n${output}`);
+            } catch (e) {
+              results.push(`✗ ${cmd}\n${e.message}`);
+            }
+          } else {
+            results.push(`⊘ ${cmd} (無法路由)`);
+          }
+        }
+        return sendDirectResponse(reqId, results.join('\n\n───\n\n'), wantsStream, res);
+      } else {
+        // Execute first suggestion only
+        console.log(`[wrapper] #${reqId} EXEC FIRST: "${suggestions[0]}"`);
+        userText = suggestions[0];
+        // Fall through to normal routing with replaced userText
+      }
+    }
+  }
+
+  // Build conversation context for Ollama (fallback when short messages reach parseDevIntent)
   let conversationContext = null;
   if (userText.length <= 10 && msgs.length >= 2) {
-    // Collect last 3 turns of conversation (assistant + user pairs)
     const recentMsgs = msgs.slice(-6);
     const contextParts = [];
     for (const m of recentMsgs) {
-      if (m === lastUserMsg) continue; // skip current message
+      if (m === lastUserMsg) continue;
       const text = normalizeContent(m.content);
       if (text) contextParts.push(`[${m.role}]: ${text.slice(0, 500)}`);
     }
     if (contextParts.length > 0) {
       conversationContext = contextParts.join('\n');
-      console.log(`[wrapper] #${reqId} short msg "${userText}" — injecting ${contextParts.length} context messages`);
     }
   }
 
