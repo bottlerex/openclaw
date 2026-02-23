@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// OpenClaw Tool Wrapper Proxy v10.1
+// OpenClaw Tool Wrapper Proxy v10.2
+// v10.2: mac-agentd integration — structured host execution replacing claude -p
 // v10.1: GLM-4.7-Flash Ollama-first routing with Claude fallback
 // v10: Mem0 memory layer — persistent cross-session memory via mem0-service (:8002)
 // v9: Smart intent (strong/weak signals), /health, /metrics, rate limiting, error handling
@@ -10,6 +11,7 @@
 const http = require('http');
 const { execFile, spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const ollamaRouter = require('./ollama-router');
 
 const UPSTREAM_HOST = 'localhost';
@@ -37,6 +39,36 @@ const metrics = {
   ollamaRouted: 0,
   ollamaFallback: 0,
 };
+
+
+// ─── Token Usage Tracking (Rex-AI Dashboard) ─────────────────────
+
+function trackTokenUsage(model, provider, usage, durationMs) {
+  if (!usage) return;
+  const payload = {
+    model: model || "unknown",
+    provider: provider || "anthropic",
+    input_tokens: usage.input_tokens || usage.prompt_tokens || 0,
+    output_tokens: usage.output_tokens || usage.completion_tokens || 0,
+    cache_read: usage.cache_read_input_tokens || 0,
+    cache_write: usage.cache_creation_input_tokens || 0,
+    source: "openclaw",
+    duration_ms: durationMs ? Math.round(durationMs) : null,
+  };
+  const body = JSON.stringify(payload);
+  const req = http.request({
+    hostname: "localhost",
+    port: 8004,
+    path: "/api/v1/token-usage",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+    timeout: 3000,
+  });
+  req.on("error", () => {});
+  req.on("timeout", () => req.destroy());
+  req.write(body);
+  req.end();
+}
 
 // ─── Rate Limiting ──────────────────────────────────────────────
 
@@ -153,6 +185,7 @@ const PROJECT_ROUTES = [
   { keywords: ['sales-visit', 'sales visit', '業務拜訪', '拜訪'], dir: '~/Project/active_projects/sales-visit' },
   { keywords: ['central-hub', 'central hub', '中央', '控制中心'], dir: '~/Project/central-hub' },
   { keywords: ['channels', 'channel', '頻道'], dir: '~/Project/active_projects/channels' },
+  { keywords: ["mac mini", "mac-mini", "macmini", "主機", "伺服器", "server"], dir: "~" },
 ];
 
 const ALLOWED_DEV_PATHS = [
@@ -1059,93 +1092,258 @@ function logDevWork(project, prompt, durationSec, success) {
   });
 }
 
-function executeDevCommand(prompt, projectDir) {
+// ─── mac-agentd Integration ───────────────────────────────────
+
+const AGENTD_HOST = '127.0.0.1';
+const AGENTD_PORT = 7777;
+const AGENTD_TIMEOUT = 30000; // 30s per request
+let AGENTD_TOKEN = null;
+
+// Load agentd token
+try {
+  AGENTD_TOKEN = fs.readFileSync(path.join(process.env.HOME || '/Users/rexmacmini', '.agentd-token'), 'utf8').trim();
+  console.log('[wrapper] agentd token loaded');
+} catch (e) {
+  console.error('[wrapper] WARNING: cannot read agentd token:', e.message);
+}
+
+// Deterministic intent mapping — LLM outputs intent, wrapper maps to endpoint
+const INTENT_MAP = {
+  'show_git_log':      { endpoint: '/git/log',       paramsFn: (target) => ({ repo: resolveProject(target) }) },
+  'show_git_status':   { endpoint: '/git/status',     paramsFn: (target) => ({ repo: resolveProject(target) }) },
+  'show_git_diff':     { endpoint: '/git/diff',       paramsFn: (target) => ({ repo: resolveProject(target) }) },
+  'read_file':         { endpoint: '/fs/read',        paramsFn: (target, extra) => ({ path: extra.path }) },
+  'write_file':        { endpoint: '/fs/write',       paramsFn: (target, extra) => ({ path: extra.path, content: extra.content }) },
+  'list_files':        { endpoint: '/fs/list',        paramsFn: (target) => ({ path: resolveProject(target) }) },
+  'restart_container': { endpoint: '/docker/restart',  paramsFn: (target) => ({ container: resolveContainer(target) }) },
+  'show_logs':         { endpoint: '/docker/logs',     paramsFn: (target) => ({ container: resolveContainer(target), tail: 50 }) },
+  'run_tests':         { endpoint: '/project/test',    paramsFn: (target) => ({ repo: resolveProject(target) }) },
+  'show_containers':   { endpoint: '/docker/ps',       paramsFn: () => ({}) },
+  'git_add':           { endpoint: '/git/add',         paramsFn: (target, extra) => ({ repo: resolveProject(target), files: extra.files || ['.'] }) },
+  'git_commit':        { endpoint: '/git/commit',      paramsFn: (target, extra) => ({ repo: resolveProject(target), message: extra.message }) },
+};
+
+// Container alias mapping
+const CONTAINER_ALIASES = {
+  'openclaw': 'openclaw-agent',
+  'openclaw-bot': 'openclaw-agent',
+  'bot': 'openclaw-agent',
+  'stock': 'taiwan-stock-backend',
+  'taiwan-stock': 'taiwan-stock-backend',
+  'grafana': 'taiwan-stock-grafana',
+  'prometheus': 'taiwan-stock-prometheus',
+  'pg': 'postgres',
+  'db': 'postgres',
+  'pai': 'personal-ai-gateway',
+  'personal-ai': 'personal-ai-gateway',
+  'rex-ai': 'rex-ai',
+};
+
+function resolveContainer(name) {
+  if (!name) return name;
+  return CONTAINER_ALIASES[name.toLowerCase()] || name;
+}
+
+function resolveProject(target) {
+  if (!target) return '/Users/rexmacmini/openclaw';
+  const lower = target.toLowerCase();
+  for (const route of PROJECT_ROUTES) {
+    if (route.keywords.some(kw => lower.includes(kw))) {
+      return resolveHome(route.dir);
+    }
+  }
+  // If target looks like a path, use it directly
+  if (target.startsWith('/') || target.startsWith('~')) {
+    return resolveHome(target);
+  }
+  return '/Users/rexmacmini/openclaw';
+}
+
+function callAgentd(endpoint, params, timeout) {
   return new Promise((resolve, reject) => {
-    const resolvedDir = resolveHome(projectDir);
-    const claudePath = '/opt/homebrew/bin/claude';
-    const startTime = Date.now();
+    if (!AGENTD_TOKEN) {
+      reject(new Error('agentd token not loaded'));
+      return;
+    }
+    const body = JSON.stringify(params);
+    const req = http.request({
+      hostname: AGENTD_HOST,
+      port: AGENTD_PORT,
+      path: endpoint,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AGENTD_TOKEN}`,
+        'Content-Length': Buffer.byteLength(body),
+      },
+      timeout: timeout || AGENTD_TIMEOUT,
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 400) {
+            reject(new Error(parsed.error || `agentd returned ${res.statusCode}`));
+          } else {
+            resolve(parsed);
+          }
+        } catch {
+          reject(new Error(`agentd invalid response: ${data.slice(0, 200)}`));
+        }
+      });
+    });
+    req.on('error', (e) => reject(new Error(`agentd unreachable: ${e.message}`)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('agentd timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
 
-    console.log(`[wrapper] dev-mode: spawning claude -p in ${resolvedDir}`);
-    console.log(`[wrapper] dev-mode: prompt="${prompt.slice(0, 120)}..."`);
+function checkAgentdHealth() {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: AGENTD_HOST,
+      port: AGENTD_PORT,
+      path: '/health',
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${AGENTD_TOKEN}` },
+      timeout: 2000,
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => resolve(res.statusCode === 200));
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+}
 
-    const args = [
-      '-p', prompt,
-      '--allowedTools', DEV_TOOLS,
-      '--max-turns', '25',
-    ];
+// Health watchdog — check agentd every 60s
+let agentdHealthy = true;
+let agentdFailCount = 0;
 
-    const env = {
-      ...process.env,
-      HOME: process.env.HOME || '/Users/rexmacmini',
-      PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin',
-    };
+setInterval(async () => {
+  const healthy = await checkAgentdHealth();
+  if (!healthy) {
+    agentdFailCount++;
+    if (agentdFailCount >= 3) {
+      agentdHealthy = false;
+      console.error(`[wrapper] agentd health check FAILED (${agentdFailCount} consecutive failures)`);
+    }
+  } else {
+    if (!agentdHealthy) console.log('[wrapper] agentd recovered');
+    agentdHealthy = true;
+    agentdFailCount = 0;
+  }
+}, 60000);
 
-    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-      env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+// Parse intent from user message using Ollama
+async function parseDevIntent(userMessage) {
+  const prompt = `Analyze this user message and extract the intent for a development tool.
+Output ONLY valid JSON, no explanation.
+
+Available intents:
+- show_git_log: view git commit history
+- show_git_status: check git working tree status
+- show_git_diff: view code changes
+- read_file: read a specific file
+- write_file: write content to a file
+- list_files: list directory contents
+- restart_container: restart a Docker container
+- show_logs: view Docker container logs
+- run_tests: run project tests
+- show_containers: list all Docker containers
+- git_add: stage files for commit
+- git_commit: commit staged changes
+
+User message: "${userMessage}"
+
+Respond with JSON: {"intent": "<intent_name>", "target": "<project_or_container_name>", "extra": {<optional_fields>}}
+If the message doesn't match any intent, respond: {"intent": "unknown"}`;
+
+  try {
+    const ollamaResult = await ollamaRouter.tryOllamaChat(
+      [{ role: 'user', content: prompt }],
+      { model: 'qwen2.5-coder:7b' }
+    );
+    if (!ollamaResult.success) {
+      console.error(`[wrapper] Ollama intent parsing failed: ${ollamaResult.reason}`);
+      return null;
+    }
+    const text = (ollamaResult.content || '').trim();
+    // Extract JSON from response (may be wrapped in markdown)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (!parsed.intent || parsed.intent === 'unknown') return null;
+    return parsed;
+  } catch (e) {
+    console.error(`[wrapper] intent parsing error: ${e.message}`);
+    return null;
+  }
+}
+
+function formatAgentdResult(endpoint, result) {
+  if (result.error) return `[error] ${result.error}`;
+  if (result.log) return result.log;
+  if (result.status !== undefined && typeof result.status === 'string') return result.status || '(clean)';
+  if (result.diff) return result.diff || '(no changes)';
+  if (result.content !== undefined) return result.content;
+  if (result.containers) return result.containers;
+  if (result.logs) return result.logs;
+  if (result.output) return result.output;
+  if (result.added) return `Added: ${result.added.join(', ')}`;
+  if (result.artifact) return `Test output saved to ${result.artifact}\n${result.summary || ''}`;
+  if (Array.isArray(result)) return result.map(e => `${e.type === 'dir' ? '📁' : '📄'} ${e.name}`).join('\n');
+  return JSON.stringify(result, null, 2);
+}
+
+async function executeDevCommand(userMessage, projectDir) {
+  const startTime = Date.now();
+  const project = projectNameFromDir(projectDir);
+
+  // 1. Health check — fail-safe to read-only info
+  if (!agentdHealthy) {
+    console.log('[wrapper] agentd unavailable, returning read-only fallback');
+    logDevWork(project, userMessage, 0, false);
+    return '[dev-mode] mac-agentd 服務暫時不可用。請稍後再試或在 host 上檢查服務狀態。';
+  }
+
+  try {
+    // 2. Parse intent via Ollama
+    console.log(`[wrapper] dev-mode: parsing intent via Ollama`);
+    const intent = await parseDevIntent(userMessage);
+
+    if (!intent || !INTENT_MAP[intent.intent]) {
+      console.log(`[wrapper] dev-mode: unknown intent: ${JSON.stringify(intent)}`);
+      logDevWork(project, userMessage, (Date.now() - startTime) / 1000, false);
+      return `[dev-mode] 無法識別意圖。支援的操作: ${Object.keys(INTENT_MAP).join(', ')}`;
     }
 
-    let stdout = '';
-    let stderr = '';
-    let finished = false;
+    // 3. Deterministic mapping — intent → endpoint + params
+    const mapping = INTENT_MAP[intent.intent];
+    const params = mapping.paramsFn(intent.target, intent.extra || {});
 
-    const child = spawn(claudePath, args, {
-      cwd: resolvedDir,
-      env,
-      timeout: DEV_TIMEOUT_MS,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
+    console.log(`[wrapper] dev-mode: intent=${intent.intent} endpoint=${mapping.endpoint} params=${JSON.stringify(params)}`);
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
+    // 4. Call agentd
+    const result = await callAgentd(mapping.endpoint, params);
+    const elapsed = (Date.now() - startTime) / 1000;
 
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
+    // 5. Format result
+    const formatted = formatAgentdResult(mapping.endpoint, result);
+    console.log(`[wrapper] dev-mode: done in ${elapsed.toFixed(1)}s (job=${result.job_id})`);
+    logDevWork(project, userMessage, elapsed, true);
 
-    const timer = setTimeout(() => {
-      if (!finished) {
-        finished = true;
-        child.kill('SIGTERM');
-        const partial = stdout.slice(-DEV_MAX_OUTPUT) || '(timeout, no output)';
-        resolve(`[dev-mode timeout after ${DEV_TIMEOUT_MS / 1000}s]\n${partial}`);
-      }
-    }, DEV_TIMEOUT_MS + 5000);
-
-    child.on('close', (code) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-
-      const elapsed = (Date.now() - startTime) / 1000;
-      const project = projectNameFromDir(projectDir);
-
-      if (code !== 0 && !stdout) {
-        const errMsg = stderr.slice(-1000) || `exit code ${code}`;
-        console.error(`[wrapper] dev-mode error: ${errMsg.slice(0, 200)}`);
-        logDevWork(project, prompt, elapsed, false);
-        resolve(`[dev-mode error (exit ${code})]\n${errMsg.slice(0, DEV_MAX_OUTPUT)}`);
-      } else {
-        let output = stdout;
-        if (output.length > DEV_MAX_OUTPUT) {
-          output = output.slice(0, DEV_MAX_OUTPUT) + `\n... (truncated, total ${stdout.length} chars)`;
-        }
-        console.log(`[wrapper] dev-mode done: exit=${code} output=${stdout.length} chars`);
-        logDevWork(project, prompt, elapsed, true);
-        resolve(output);
-      }
-    });
-
-    child.on('error', (err) => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      console.error(`[wrapper] dev-mode spawn error: ${err.message}`);
-      resolve(`[dev-mode error] ${err.message}`);
-    });
-
-    child.stdin.end();
-  });
+    return formatted;
+  } catch (e) {
+    const elapsed = (Date.now() - startTime) / 1000;
+    console.error(`[wrapper] dev-mode error: ${e.message}`);
+    logDevWork(project, userMessage, elapsed, false);
+    return `[dev-mode error] ${e.message}`;
+  }
 }
 
 // ─── Work Progress ──────────────────────────────────────────────
@@ -1297,7 +1495,7 @@ function streamPassthrough(reqId, body, res, skillContext, memoryContext, userTe
       'Authorization': 'Bearer not-needed',
     'x-api-key': process.env.CLAUDE_CODE_OAUTH_TOKEN || ''
     },
-    timeout: 120000
+    timeout: 300000 // 5min for Opus + tools
   };
 
   const upReq = http.request(opts, (upRes) => {
@@ -1361,7 +1559,7 @@ function streamPassthrough(reqId, body, res, skillContext, memoryContext, userTe
 
       // Store conversation in memory (fire-and-forget)
       if (userText && assistantText && assistantText.length > 10) {
-        storeMemory(userText, assistantText);
+        // storeMemory(userText, assistantText); // Mem0 removed
       }
     });
   });
@@ -1409,7 +1607,7 @@ function forwardNonStreaming(reqId, body, res, skillContext, memoryContext, user
       'Authorization': 'Bearer not-needed',
     'x-api-key': process.env.CLAUDE_CODE_OAUTH_TOKEN || ''
     },
-    timeout: 120000
+    timeout: 300000 // 5min for Opus + tools
   };
 
   const upReq = http.request(opts, (upRes) => {
@@ -1439,9 +1637,12 @@ function forwardNonStreaming(reqId, body, res, skillContext, memoryContext, user
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response));
 
+        // Track token usage (fire-and-forget)
+        trackTokenUsage(parsed.model || body.model, "anthropic", parsed.usage, totalTime);
+
         // Store conversation in memory (fire-and-forget)
         if (userText && text && text.length > 10) {
-          storeMemory(userText, text);
+          // storeMemory(userText, text); // Mem0 removed
         }
       } catch (e) {
         console.error(`[wrapper] #${reqId} parse error: ${e.message}`);
@@ -1550,6 +1751,10 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   if (forceModel) {
     userText = ollamaRouter.stripForceDirective(userText);
     console.log(`[wrapper] #${reqId} force model: ${forceModel}`);
+    if (forceModel === 'opus') {
+      parsed.model = 'claude-opus-4';
+      console.log(`[wrapper] #${reqId} model override: claude-opus-4`);
+    }
   }
 
   let skillContext = null;
@@ -1557,7 +1762,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
 
   // Fetch relevant memories (non-blocking, with timeout protection)
   if (userText) {
-    memoryContext = await fetchMemories(userText);
+    // memoryContext = await fetchMemories(userText); // Mem0 removed
   }
 
   
@@ -1621,7 +1826,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       try {
         const output = await executeDevCommand(devIntent.prompt, devIntent.projectDir);
         // Store dev interaction in memory too
-        if (userText && output) storeMemory(userText, output.slice(0, 500));
+        // if (userText && output) storeMemory(userText, output.slice(0, 500)); // Mem0 removed
         return sendDirectResponse(reqId, output, wantsStream, res);
       } catch (e) {
         console.error(`[wrapper] #${reqId} dev error: ${e.message}`);
@@ -1726,8 +1931,14 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
         console.log(`[wrapper] #${reqId} ollama OK: quality=${quality.toFixed(2)} latency=${ollamaResult.latency}ms`);
 
         if (userText && ollamaResult.content.length > 10) {
-          storeMemory(userText, ollamaResult.content);
+          // storeMemory(userText, ollamaResult.content); // Mem0 removed
         }
+        // Track Ollama token usage
+        trackTokenUsage(modelName, "ollama", {
+          input_tokens: ollamaResult.promptTokens || 0,
+          output_tokens: ollamaResult.evalTokens || 0,
+        }, ollamaResult.latency);
+
         return sendDirectResponse(reqId, ollamaResult.content + footer, wantsStream, res);
       }
 
@@ -1746,7 +1957,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   }
 
   // Claude (fallback, forced, or has skill context)
-  if (!skillContext) {
+  if (!skillContext && forceModel !== 'opus') {
     // No skill matched — let Claude decide using tool-use
     return await handleWithSkillTools(reqId, parsed, res, wantsStream, memoryContext, skillContext, userText);
   } else {
@@ -1786,7 +1997,7 @@ function callClaudeNonStreaming(messages, tools, toolChoice) {
         'Authorization': 'Bearer not-needed',
         'x-api-key': process.env.CLAUDE_CODE_OAUTH_TOKEN || ''
       },
-      timeout: 60000
+      timeout: 300000 // 5min for Opus + tools
     };
 
     const req = http.request(opts, (res) => {
@@ -1837,6 +2048,11 @@ async function handleWithSkillTools(reqId, parsedBody, res, wantsStream, memoryC
 
       // Call Claude with skill tools available
       const claudeResponse = await callClaudeNonStreaming(allMessages, SKILL_TOOLS, 'auto');
+
+      // Track Claude tool-use token usage
+      if (claudeResponse.usage) {
+        trackTokenUsage(claudeResponse.model || "claude-haiku-4-5", "anthropic", claudeResponse.usage);
+      }
 
       if (!claudeResponse.choices || !claudeResponse.choices[0]) {
         throw new Error('Invalid Claude response structure');
@@ -1903,7 +2119,7 @@ async function handleWithSkillTools(reqId, parsedBody, res, wantsStream, memoryC
 
         // Store in memory
         if (userText && finalContent && finalContent.length > 10) {
-          storeMemory(userText, finalContent);
+          // storeMemory(userText, finalContent); // Mem0 removed
         }
 
         // Send response
@@ -2033,6 +2249,32 @@ function handleMetrics(res) {
   res.end(JSON.stringify(data, null, 2));
 }
 
+
+// System metrics proxy endpoint
+function handleSystemMetrics(res) {
+  const opts = {
+    hostname: 'localhost',
+    port: 9090,
+    path: '/metrics',
+    method: 'GET',
+    timeout: 5000
+  };
+  const proxyReq = http.request(opts, (proxyRes) => {
+    let data = '';
+    proxyRes.on('data', chunk => data += chunk);
+    proxyRes.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(data);
+    });
+  });
+  proxyReq.on('error', (e) => {
+    console.error('[wrapper] system metrics proxy error:', e.message);
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'System metrics unavailable: ' + e.message }));
+  });
+  proxyReq.end();
+}
+
 // ─── Model Usage Endpoint ─────────────────────────────────────
 
 function handleModelUsage(res) {
@@ -2115,6 +2357,11 @@ const server = http.createServer((req, res) => {
     return handleMetrics(res);
   }
 
+  // System metrics proxy
+  if (req.url === "/metrics/system" && req.method === "GET") {
+    return handleSystemMetrics(res);
+  }
+
   // Model usage stats
   if ((req.url === '/metrics/model-usage' || req.url === '/metrics/model') && req.method === 'GET') {
     return handleModelUsage(res);
@@ -2123,6 +2370,28 @@ const server = http.createServer((req, res) => {
   // Embeddings endpoint - proxy to Ollama nomic-embed-text
   if (req.url === '/v1/embeddings' && req.method === 'POST') {
     return proxyEmbeddingsToOllama(req, res);
+  }
+
+  
+  // System metrics API proxy
+  if (req.url === '/api/metrics/system' && req.method === 'GET') {
+    const opts = {
+      hostname: '127.0.0.1',
+      port: 9090,
+      path: '/metrics',
+      method: 'GET',
+      timeout: 5000
+    };
+    const proxyReq = http.request(opts, (proxyRes) => {
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(res);
+    });
+    proxyReq.on('error', (e) => {
+      console.error('[wrapper] metrics proxy error:', e.message);
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'System metrics unavailable' }));
+    });
+    return proxyReq.end();
   }
 
   if (!req.url.startsWith('/v1/chat/completions')) {
