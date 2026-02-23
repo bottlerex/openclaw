@@ -314,12 +314,19 @@ routes['POST /git/add'] = async (body) => {
   if (!isAllowedPath(body.repo)) throw { status: 403, message: 'repo not allowed' };
   if (body.files.length === 0) throw { status: 400, message: 'files array cannot be empty' };
   if (body.files.length > 20) throw { status: 400, message: 'too many files (max 20)' };
-  // Reject path traversal in file names
-  for (const f of body.files) {
-    if (f.includes('..') || f.startsWith('/')) throw { status: 400, message: `invalid file path: ${f}` };
+  // Reject path traversal in file names (allow -u flag for tracked files)
+  const gitAddArgs = ['add'];
+  const hasUpdateFlag = body.files.length === 1 && body.files[0] === '-u';
+  if (hasUpdateFlag) {
+    gitAddArgs.push('-u');
+  } else {
+    for (const f of body.files) {
+      if (f.includes('..') || f.startsWith('/')) throw { status: 400, message: `invalid file path: ${f}` };
+    }
+    gitAddArgs.push('--', ...body.files);
   }
 
-  const result = await execCommand('git', ['add', '--', ...body.files], { cwd: body.repo });
+  const result = await execCommand('git', gitAddArgs, { cwd: body.repo });
   return { repo: body.repo, added: body.files, ok: true };
 };
 

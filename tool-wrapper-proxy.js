@@ -1126,7 +1126,7 @@ const INTENT_MAP = {
   'show_containers':   { endpoint: '/docker/ps',       paramsFn: () => ({}) },
   'system_info':       { endpoint: '/system/info',     paramsFn: () => ({}), method: 'GET' },
   'git_add':           { endpoint: '/git/add',         paramsFn: (target, extra) => ({ repo: resolveProject(target), files: extra.files || ['.'] }) },
-  'git_commit':        { endpoint: '/git/commit',      paramsFn: (target, extra) => ({ repo: resolveProject(target), message: extra.message }) },
+  'git_commit':        { endpoint: '_commit_flow',     paramsFn: (target, extra) => ({ repo: resolveProject(target), message: extra.message || 'chore: commit pending changes via OpenClaw' }), multi: true },
   'project_overview':  { endpoint: '_multi', paramsFn: (target) => ({ repo: resolveProject(target) }), multi: true },
 };
 
@@ -1422,6 +1422,34 @@ async function executeDevCommand(userMessage, projectDir) {
 
     // 4. Call agentd (multi-intent gathers multiple pieces of info)
     let result;
+    if (mapping.multi && mapping.endpoint === '_commit_flow') {
+      // Commit flow: git add -u → git commit
+      const repo = params.repo;
+      const msg = params.message;
+      console.log(`[wrapper] commit-flow: add + commit in ${repo}`);
+
+      // Step 1: git add tracked files
+      const addResult = await callAgentd('/git/add', { repo, files: ['-u'] }).catch(e => ({ error: e.message }));
+      if (addResult.error) {
+        const elapsed = (Date.now() - startTime) / 1000;
+        logDevWork(project, userMessage, elapsed, false);
+        return `[commit error] git add failed: ${addResult.error}`;
+      }
+
+      // Step 2: git commit
+      const commitResult = await callAgentd('/git/commit', { repo, message: msg }).catch(e => ({ error: e.message }));
+      const elapsed = (Date.now() - startTime) / 1000;
+
+      if (commitResult.error) {
+        logDevWork(project, userMessage, elapsed, false);
+        return `[commit error] ${commitResult.error}`;
+      }
+
+      console.log(`[wrapper] commit-flow: done in ${elapsed.toFixed(1)}s`);
+      logDevWork(project, userMessage, elapsed, true);
+      return `commit 完成:\n${commitResult.output || 'OK'}`;
+    }
+
     if (mapping.multi) {
       const repo = params.repo;
       console.log(`[wrapper] multi-intent: gathering data for ${repo}`);
