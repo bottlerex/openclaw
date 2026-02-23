@@ -2125,9 +2125,11 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   // When user sends a short confirmation, extract 👉 commands from conversation
   // history and execute them directly — no Ollama, fully deterministic
   const actualUserText = userText; // already stripped above
-  const CONFIRM_WORDS = ['執行', '做', '好', '繼續', '開始', '進行', '處理', 'do', 'go', 'execute', 'proceed', 'yes', 'ok'];
+  const CONFIRM_WORDS = ['執行', '做吧', '好', '繼續', '開始吧', '處理', 'do it', 'go', 'execute', 'proceed', 'yes', 'ok'];
   const lowerActual = actualUserText.toLowerCase();
-  const isConfirm = actualUserText.length <= 15 && CONFIRM_WORDS.some(w => lowerActual.includes(w));
+  // Only treat as confirm if it's a short, standalone confirmation — not a sentence with project names
+  const hasProjectKeyword = PROJECT_ROUTES.some(r => r.keywords.some(kw => lowerActual.includes(kw)));
+  const isConfirm = !hasProjectKeyword && actualUserText.length <= 10 && CONFIRM_WORDS.some(w => lowerActual.includes(w));
   const wantsAll = lowerActual.includes('全部') || lowerActual.includes('all') || lowerActual.includes('都');
 
   if (isConfirm) console.log(`[wrapper] #${reqId} confirm-check: actual="${actualUserText}" isConfirm=true wantsAll=${wantsAll}`);
