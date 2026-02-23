@@ -26,6 +26,7 @@ const ollamaStats = {
 function detectForceModel(userText) {
   if (!userText) return null;
   const lower = userText.toLowerCase();
+  if (lower.includes('@opus')) return 'opus';
   if (lower.includes('@claude') || lower.includes('@haiku')) return 'claude';
   if (lower.includes('@glm')) return 'glm';       // GLM-4.7-Flash specifically
   if (lower.includes('@ollama')) return 'ollama';  // default Ollama model
@@ -33,7 +34,7 @@ function detectForceModel(userText) {
 }
 
 function stripForceDirective(userText) {
-  return userText.replace(/@(?:claude|haiku|ollama|glm)\b/gi, '').trim();
+  return userText.replace(/@(?:claude|haiku|opus|ollama|glm)\b/gi, '').trim();
 }
 
 // ─── Quality Assessment ──────────────────────────────────────────
