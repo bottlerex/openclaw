@@ -1366,7 +1366,7 @@ function formatAgentdResult(endpoint, result) {
   if (result.error) return formatDevError('agentd', result.error);
   if (result.log) return result.log;
   if (result.status !== undefined && typeof result.status === 'string') return result.status || '(clean)';
-  if (result.diff) return result.diff || '(no changes)';
+  if (result.diff !== undefined) return result.diff || '(no changes)';
   if (result.content !== undefined) return result.content;
   if (result.containers) return result.containers;
   if (result.logs) return result.logs;
@@ -1446,8 +1446,11 @@ ${projectData}` },
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
-          const content = parsed.choices?.[0]?.message?.content;
+          let content = parsed.choices?.[0]?.message?.content;
           if (content) {
+            // Post-process: strip trailing questions Haiku sometimes adds
+            content = content.replace(/\n*(?:需要[我們]?幫你|要不要[我們]?|如果你需要|等待你的|哪個方式方便|需要幫你)[^\n]*[？?]?\s*$/g, '').trim();
+            content = content.replace(/\n*[^\n]*[？]\s*$/g, '').trim();
             resolve(content);
           } else {
             reject(new Error('empty Haiku response'));
