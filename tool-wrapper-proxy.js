@@ -2043,6 +2043,16 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   const lastUserMsg = [...msgs].reverse().find(m => m.role === 'user');
   let userText = lastUserMsg ? normalizeContent(lastUserMsg.content) : '';
 
+  // Strip OpenClaw metadata prefix early — all downstream routing uses clean text
+  const stripMetadata = (text) => {
+    const metaEnd = text.indexOf('```\n\n');
+    if (metaEnd !== -1 && text.toLowerCase().startsWith('conversation info')) {
+      return text.slice(metaEnd + 5).trim();
+    }
+    return text.trim();
+  };
+  userText = stripMetadata(userText);
+
   // Detect force model directive (@claude, @ollama, @glm)
   const forceModel = ollamaRouter.detectForceModel(userText);
   if (forceModel) {
@@ -2114,16 +2124,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   // Priority 0.9: Follow-up execution
   // When user sends a short confirmation, extract 👉 commands from conversation
   // history and execute them directly — no Ollama, fully deterministic
-  // Strip OpenClaw metadata prefix to get the actual user message
-  const stripMetadata = (text) => {
-    // OpenClaw prepends "Conversation info (untrusted metadata):\n```json\n{...}\n```\n\n"
-    const metaEnd = text.indexOf('```\n\n');
-    if (metaEnd !== -1 && text.toLowerCase().startsWith('conversation info')) {
-      return text.slice(metaEnd + 5).trim();
-    }
-    return text.trim();
-  };
-  const actualUserText = stripMetadata(userText);
+  const actualUserText = userText; // already stripped above
   const CONFIRM_WORDS = ['執行', '做', '好', '繼續', '開始', '進行', '處理', 'do', 'go', 'execute', 'proceed', 'yes', 'ok'];
   const lowerActual = actualUserText.toLowerCase();
   const isConfirm = actualUserText.length <= 15 && CONFIRM_WORDS.some(w => lowerActual.includes(w));
