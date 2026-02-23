@@ -2107,25 +2107,43 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   // Priority 0.9: Follow-up execution
   // When user sends a short confirmation, extract 👉 commands from conversation
   // history and execute them directly — no Ollama, fully deterministic
+  // Strip OpenClaw metadata prefix to get the actual user message
+  const stripMetadata = (text) => {
+    // OpenClaw prepends "Conversation info (untrusted metadata):\n```json\n{...}\n```\n\n"
+    const metaEnd = text.indexOf('```\n\n');
+    if (metaEnd !== -1 && text.toLowerCase().startsWith('conversation info')) {
+      return text.slice(metaEnd + 5).trim();
+    }
+    return text.trim();
+  };
+  const actualUserText = stripMetadata(userText);
   const CONFIRM_WORDS = ['執行', '做', '好', '繼續', '開始', '進行', '處理', 'do', 'go', 'execute', 'proceed', 'yes', 'ok'];
-  const lowerTrimmed = userText.toLowerCase().trim();
-  const isConfirm = lowerTrimmed.length <= 15 && CONFIRM_WORDS.some(w => lowerTrimmed.includes(w));
-  const wantsAll = lowerTrimmed.includes('全部') || lowerTrimmed.includes('all') || lowerTrimmed.includes('都');
+  const lowerActual = actualUserText.toLowerCase();
+  const isConfirm = actualUserText.length <= 15 && CONFIRM_WORDS.some(w => lowerActual.includes(w));
+  const wantsAll = lowerActual.includes('全部') || lowerActual.includes('all') || lowerActual.includes('都');
 
+  console.log(`[wrapper] #${reqId} confirm-check: actual="${actualUserText}" len=${actualUserText.length} isConfirm=${isConfirm} wantsAll=${wantsAll}`);
   if (isConfirm && msgs.length >= 2) {
     // Extract all 👉 commands from conversation history
     const suggestions = [];
+    let assistantCount = 0;
     for (const m of [...msgs].reverse()) {
       if (m.role !== 'assistant') continue;
+      assistantCount++;
       const text = normalizeContent(m.content);
-      const matches = text.match(/👉\s*(.+)/g);
+      const has_pointer = text.includes('👉');
+      if (assistantCount <= 3) console.log(`[wrapper] #${reqId} assistant[${assistantCount}]: len=${text.length} has👉=${has_pointer} preview="${text.slice(0, 80)}"`);
+      // Match 👉 only at start of line (actual suggestions, not inline text)
+      const matches = text.match(/^👉\s*(.+)/gm);
       if (matches) {
         for (const match of matches) {
-          suggestions.push(match.replace(/^👉\s*/, '').trim());
+          const cmd = match.replace(/^👉\s*/, '').trim();
+          if (cmd.length >= 3) suggestions.push(cmd); // skip empty/tiny matches
         }
         break; // use the most recent assistant message with 👉
       }
     }
+    console.log(`[wrapper] #${reqId} suggestions found: ${suggestions.length} (searched ${assistantCount} assistant msgs)`);
 
     if (suggestions.length > 0) {
       if (wantsAll) {
