@@ -1066,30 +1066,7 @@ async function handleGmailBatchDelete(reqId, userText, wantsStream, res) {
 // ─── Dev Mode Detection (v9: Smart Intent) ───────────────────────
 
 // v10.3: Simplified detectDevIntent — unified logic
-function detectDevIntent(text) {
-  if (!text) return null;
-  const lower = text.toLowerCase();
 
-  // 1. Check for explicit project keyword → dev mode
-  let projectDir = null;
-  for (const route of PROJECT_ROUTES) {
-    if (route.keywords.some(kw => lower.includes(kw))) {
-      projectDir = route.dir;
-      break;
-    }
-  }
-
-  // 2. No project keyword → check if dev action + lastDevProject (follow-up)
-  if (!projectDir) {
-    const hasDevAction = DEV_ACTION_WORDS.some(kw => lower.includes(kw));
-    if (hasDevAction && lastDevProject) {
-      return { prompt: text, projectDir: lastDevProject, signal: 'follow-up' };
-    }
-    return null; // not a dev intent
-  }
-
-  return { prompt: text, projectDir, signal: 'project-keyword' };
-}
 
 function resolveHome(dir) {
   const home = process.env.HOME || '/Users/rexmacmini';
@@ -1138,6 +1115,208 @@ try {
 } catch (e) {
   console.error('[wrapper] WARNING: cannot read agentd token:', e.message);
 }
+
+// ─── AGENTD Dev Tools (v11 Tool Calling) ──────────────────────────────
+
+const AGENTD_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'git_log',
+      description: '查看 Git 提交歷史',
+      parameters: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '專案名稱或路徑（如 openclaw, taiwan-stock）' }
+        },
+        required: ['project']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_status',
+      description: '查看 Git 工作區狀態',
+      parameters: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '專案名稱或路徑' }
+        },
+        required: ['project']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_diff',
+      description: '查看程式碼變更（未提交的 diff）',
+      parameters: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '專案名稱或路徑' }
+        },
+        required: ['project']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_add',
+      description: '暫存檔案 (git add)',
+      parameters: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '專案名稱或路徑' },
+          files: { type: 'array', items: { type: 'string' }, description: '檔案列表（預設 .）' }
+        },
+        required: ['project']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_commit',
+      description: '提交改動 (git commit)',
+      parameters: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '專案名稱或路徑' },
+          message: { type: 'string', description: 'Commit 訊息' }
+        },
+        required: ['project', 'message']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: '讀取檔案內容',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '檔案的完整路徑' }
+        },
+        required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: '寫入檔案',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '檔案的完整路徑' },
+          content: { type: 'string', description: '檔案內容' }
+        },
+        required: ['path', 'content']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_files',
+      description: '列出目錄內容',
+      parameters: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '專案名稱或路徑' }
+        },
+        required: ['project']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'docker_ps',
+      description: '列出所有 Docker 容器',
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'docker_restart',
+      description: '重啟 Docker 容器',
+      parameters: {
+        type: 'object',
+        properties: {
+          container: { type: 'string', description: '容器名稱（如 openclaw, postgres）' }
+        },
+        required: ['container']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'docker_logs',
+      description: '查看容器日誌',
+      parameters: {
+        type: 'object',
+        properties: {
+          container: { type: 'string', description: '容器名稱' },
+          tail: { type: 'integer', description: '最後 N 行（預設 50）', default: 50 }
+        },
+        required: ['container']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_tests',
+      description: '執行專案測試',
+      parameters: {
+        type: 'object',
+        properties: {
+          project: { type: 'string', description: '專案名稱或路徑' }
+        },
+        required: ['project']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'system_info',
+      description: '查看系統資訊',
+      parameters: { type: 'object', properties: {} }
+    }
+  }
+];
+
+
+// ─── Dev Tool Loop Helper Functions ───────────────────────────────────
+
+function shouldInjectDevTools(userText) {
+  if (!userText) return false;
+  const lower = userText.toLowerCase();
+  
+  // Has project keyword → true
+  const hasProjectKw = PROJECT_ROUTES.some(r => r.keywords.some(kw => lower.includes(kw)));
+  if (hasProjectKw) return true;
+  
+  // Has lastDevProject → true (follow-up)
+  if (lastDevProject) return true;
+  
+  // Has docker/system keyword → true
+  const devKeywords = ['docker', '容器', 'log', 'git', 'commit', 'test', '部署', '檔案', '讀取', '列出', 'restart', 'status', 'diff'];
+  const hasDevKw = devKeywords.some(kw => lower.includes(kw));
+  if (hasDevKw && DEV_ACTION_WORDS.some(w => lower.includes(w))) return true;
+  
+  return false;
+}
+
 
 // Deterministic intent mapping — LLM outputs intent, wrapper maps to endpoint
 const INTENT_MAP = {
@@ -1286,75 +1465,7 @@ setInterval(async () => {
 }, 60000);
 
 // v10.3: Parse intent from user message using Ollama — improved prompt with few-shot
-async function parseDevIntent(userMessage, conversationContext) {
-  const systemPrompt = `你是意圖分類器。根據用戶訊息，輸出 JSON。只輸出 JSON，不要解釋。
 
-可用意圖:
-- show_git_log: 查看 git 提交歷史
-- show_git_status: 查看 git 工作區狀態
-- show_git_diff: 查看程式碼變更
-- read_file: 讀取特定檔案（extra.path 必填）
-- write_file: 寫入檔案（extra.path + extra.content 必填）
-- list_files: 列出目錄內容
-- restart_container: 重啟 Docker 容器（target = 容器名）
-- show_logs: 查看 Docker 容器日誌（target = 容器名）
-- run_tests: 執行測試
-- show_containers: 列出所有 Docker 容器
-- system_info: 系統資訊
-- docker_overview: Docker 容器總覽（列出所有容器 + 每個容器最新日誌 → 分析）
-- test_and_analyze: 執行測試 + 分析結果
-- project_overview: 專案總覽（git status + log + 檔案列表 → 分析改善建議）
-- git_add: 暫存檔案
-- git_commit: 提交改動
-- none: 不是開發操作（閒聊、問問題）
-
-格式: {"intent": "<名稱>", "target": "<專案或容器>", "extra": {}}`;
-
-  const fewShot = `範例:
-"查看 openclaw 的 git log" → {"intent":"show_git_log","target":"openclaw"}
-"幫我改善" → {"intent":"project_overview","target":""}
-"重啟 openclaw 容器" → {"intent":"restart_container","target":"openclaw"}
-"跑測試 taiwan-stock" → {"intent":"test_and_analyze","target":"taiwan-stock"}
-"commit openclaw 的改動" → {"intent":"git_commit","target":"openclaw"}
-"Docker 容器狀態" → {"intent":"docker_overview","target":""}
-"看 openclaw 的 logs" → {"intent":"show_logs","target":"openclaw"}
-"查看 taiwan-stock git diff" → {"intent":"show_git_diff","target":"taiwan-stock"}
-"進行台灣股票專案開發" → {"intent":"project_overview","target":"taiwan-stock"}
-"開始 openclaw 開發" → {"intent":"project_overview","target":"openclaw"}
-"看看 taiwan-stock 目前狀況" → {"intent":"project_overview","target":"taiwan-stock"}
-"openclaw 現在怎樣" → {"intent":"project_overview","target":"openclaw"}
-"今天天氣如何" → {"intent":"none","target":""}
-"你好" → {"intent":"none","target":""}
-
-帶上下文的範例（用戶訊息很短時，根據對話上下文判斷意圖）:
-上下文: [assistant] 建議: 👉 commit openclaw 的改動 / 用戶訊息: "執行" → {"intent":"git_commit","target":"openclaw"}
-上下文: [assistant] 建議: 👉 重啟 openclaw 容器 / 用戶訊息: "好" → {"intent":"restart_container","target":"openclaw"}
-上下文: [assistant] 建議: 👉 跑測試 taiwan-stock / 用戶訊息: "做" → {"intent":"test_and_analyze","target":"taiwan-stock"}
-上下文: [assistant] 建議: 👉 看 openclaw 的 logs / 用戶訊息: "繼續" → {"intent":"show_logs","target":"openclaw"}`;
-
-  try {
-    const ollamaResult = await ollamaRouter.tryOllamaChat(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `${fewShot}\n\n${conversationContext ? `對話上下文:\n${conversationContext}\n\n` : ''}用戶訊息: "${userMessage}"` },
-      ],
-      { model: 'qwen2.5-coder:7b' }
-    );
-    if (!ollamaResult.success) {
-      console.error(`[wrapper] Ollama intent parsing failed: ${ollamaResult.reason}`);
-      return null;
-    }
-    const text = (ollamaResult.content || '').trim();
-    const jsonMatch = text.match(/\{[\s\S]*?\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
-    if (!parsed.intent || parsed.intent === 'unknown' || parsed.intent === 'none') return null;
-    return parsed;
-  } catch (e) {
-    console.error(`[wrapper] intent parsing error: ${e.message}`);
-    return null;
-  }
-}
 
 function formatAgentdResult(endpoint, result) {
   if (result._multi) {
@@ -1471,177 +1582,7 @@ ${projectData}` },
   });
 }
 
-async function executeDevCommand(userMessage, projectDir, conversationContext) {
-  const startTime = Date.now();
-  const project = projectNameFromDir(projectDir);
 
-  // 1. Health check — fail-safe to read-only info
-  if (!agentdHealthy) {
-    console.log('[wrapper] agentd unavailable, returning read-only fallback');
-    logDevWork(project, userMessage, 0, false);
-    return formatDevError('agentd', 'mac-agentd 服務暫時不可用', '在 host 上執行: launchctl list | grep agentd');
-  }
-
-  try {
-    // 2. Parse intent via Ollama
-    console.log(`[wrapper] dev-mode: parsing intent via Ollama`);
-    let intent = await parseDevIntent(userMessage, conversationContext);
-
-    if (!intent || !INTENT_MAP[intent.intent]) {
-      // v10.3: Layered fallback — try project_overview, not blindly default
-      console.log(`[wrapper] dev-mode: unknown intent (${JSON.stringify(intent)}), falling back to project_overview`);
-      intent = { intent: 'project_overview', target: projectNameFromDir(projectDir) };
-    } else if (intent.intent === 'none') {
-      // Ollama explicitly said "not a dev command" — exit dev mode
-      console.log(`[wrapper] dev-mode: Ollama classified as non-dev, exiting dev mode`);
-      return null;
-    }
-
-    // 3. Deterministic mapping — intent → endpoint + params
-    const mapping = INTENT_MAP[intent.intent];
-    const params = mapping.paramsFn(intent.target, intent.extra || {});
-
-    console.log(`[wrapper] dev-mode: intent=${intent.intent} endpoint=${mapping.endpoint} params=${JSON.stringify(params)}`);
-
-    // 4. Call agentd (multi-intent gathers multiple pieces of info)
-    let result;
-    if (mapping.multi && mapping.endpoint === '_commit_flow') {
-      // Commit flow: git add -u → git commit
-      const repo = params.repo;
-      const msg = params.message;
-      console.log(`[wrapper] commit-flow: add + commit in ${repo}`);
-
-      // Step 1: git add tracked files
-      const addResult = await callAgentd('/git/add', { repo, files: ['-u'] }).catch(e => ({ error: e.message }));
-      if (addResult.error) {
-        const elapsed = (Date.now() - startTime) / 1000;
-        logDevWork(project, userMessage, elapsed, false);
-        return formatDevError('commit', `git add 失敗: ${addResult.error}`, '確認專案路徑正確，且有可追蹤的檔案');
-      }
-
-      // Step 2: git commit
-      const commitResult = await callAgentd('/git/commit', { repo, message: msg }).catch(e => ({ error: e.message }));
-      const elapsed = (Date.now() - startTime) / 1000;
-
-      if (commitResult.error) {
-        logDevWork(project, userMessage, elapsed, false);
-        // Provide helpful message for common failures
-        if (commitResult.error.includes('secret') || commitResult.error.includes('Potential secret')) {
-          return formatDevError('commit', 'Pre-commit hook 偵測到密鑰，已阻止提交', '從 staged files 移除含密鑰的檔案，或改用環境變數');
-        }
-        if (commitResult.error.includes('nothing to commit')) {
-          return formatDevError('commit', '沒有需要提交的改動', '可能是 untracked 檔案，試試: git add <檔名> 後再 commit');
-        }
-        return formatDevError('commit', commitResult.error);
-      }
-
-      console.log(`[wrapper] commit-flow: done in ${elapsed.toFixed(1)}s`);
-      logDevWork(project, userMessage, elapsed, true);
-      return `commit 完成:\n${commitResult.output || 'OK'}`;
-    }
-
-    // v10.3: docker_overview — list containers + tail logs for each running one
-    if (mapping.multi && mapping.endpoint === '_multi_docker') {
-      console.log('[wrapper] multi-intent: docker_overview');
-      const psResult = await callAgentd('/docker/ps', {}).catch(e => ({ error: e.message }));
-      const containerLines = (psResult.containers || '').trim().split('\n').filter(Boolean);
-      let logsData = '';
-      // Get logs for each running container (tail 10 lines each)
-      for (const line of containerLines.slice(0, 10)) {
-        const containerName = line.split('\t')[0];
-        if (!containerName) continue;
-        try {
-          const logResult = await callAgentd('/docker/logs', { container: containerName, tail: 10 });
-          logsData += `\n--- ${containerName} ---\n${(logResult.logs || '').slice(0, 500)}\n`;
-        } catch (_) {
-          logsData += `\n--- ${containerName} --- (logs unavailable)\n`;
-        }
-      }
-      const formatted = `Docker 容器列表:\n${psResult.containers || psResult.error || '(empty)'}\n\n最新日誌:\n${logsData}`;
-      console.log('[wrapper] docker_overview: sending to Haiku for analysis');
-      try {
-        const analysis = await analyzeWithHaiku(userMessage, formatted);
-        const elapsed = (Date.now() - startTime) / 1000;
-        logDevWork(project, userMessage, elapsed, true);
-        return analysis;
-      } catch (e) {
-        const elapsed = (Date.now() - startTime) / 1000;
-        logDevWork(project, userMessage, elapsed, true);
-        return formatted;
-      }
-    }
-
-    // v10.3: test_and_analyze — run tests + Haiku analysis
-    if (mapping.multi && mapping.endpoint === '_multi_test') {
-      const repo = params.repo;
-      console.log(`[wrapper] multi-intent: test_and_analyze for ${repo}`);
-      const testResult = await callAgentd('/project/test', { repo }, 120000).catch(e => ({ error: e.message, ok: false }));
-      const testOutput = testResult.output || testResult.error || testResult.summary || 'no output';
-      const formatted = `測試結果 (${repo}):\n${testOutput}`;
-      console.log('[wrapper] test_and_analyze: sending to Haiku for analysis');
-      try {
-        const analysis = await analyzeWithHaiku(userMessage, formatted);
-        const elapsed = (Date.now() - startTime) / 1000;
-        logDevWork(project, userMessage, elapsed, true);
-        return analysis;
-      } catch (e) {
-        const elapsed = (Date.now() - startTime) / 1000;
-        logDevWork(project, userMessage, elapsed, true);
-        return formatted;
-      }
-    }
-
-    if (mapping.multi) {
-      const repo = params.repo;
-      console.log(`[wrapper] multi-intent: gathering data for ${repo}`);
-      const [gitLog, gitStatus, fileList] = await Promise.all([
-        callAgentd('/git/log', { repo, count: 10 }).catch(e => { console.error('[wrapper] multi git/log error:', e.message); return { error: e.message }; }),
-        callAgentd('/git/status', { repo }).catch(e => { console.error('[wrapper] multi git/status error:', e.message); return { error: e.message }; }),
-        callAgentd('/fs/list', { path: repo }).catch(e => { console.error('[wrapper] multi fs/list error:', e.message); return { error: e.message }; }),
-      ]);
-      console.log('[wrapper] multi-intent results:', JSON.stringify({log: !!gitLog.log, status: !!gitStatus.status, entries: !!fileList.entries}));
-      result = {
-        _multi: true,
-        repo,
-        git_log: gitLog.log || gitLog.error || '',
-        git_status: gitStatus.status || gitStatus.error || '(clean)',
-        files: fileList.entries ? fileList.entries.map(e => e.name).join(', ') : (fileList.error || JSON.stringify(fileList)),
-        job_id: gitLog.job_id || 'multi',
-      };
-    } else {
-      result = await callAgentd(mapping.endpoint, params, null, mapping.method);
-    }
-    // 5. Format + analyze
-    const formatted = formatAgentdResult(mapping.endpoint, result);
-
-    if (mapping.multi) {
-      // Observe done → Analyze via Haiku
-      console.log('[wrapper] dev-mode: sending to Haiku for analysis');
-      try {
-        const analysisResult = await analyzeWithHaiku(userMessage, formatted);
-        const elapsed = (Date.now() - startTime) / 1000;
-        console.log(`[wrapper] dev-mode: analysis done in ${elapsed.toFixed(1)}s`);
-        logDevWork(project, userMessage, elapsed, true);
-        return analysisResult;
-      } catch (e) {
-        console.error('[wrapper] dev-mode: Haiku analysis failed, returning raw data:', e.message);
-        const elapsed = (Date.now() - startTime) / 1000;
-        logDevWork(project, userMessage, elapsed, true);
-        return formatted;
-      }
-    }
-
-    const elapsed = (Date.now() - startTime) / 1000;
-    console.log(`[wrapper] dev-mode: done in ${elapsed.toFixed(1)}s (job=${result.job_id})`);
-    logDevWork(project, userMessage, elapsed, true);
-    return formatted;
-  } catch (e) {
-    const elapsed = (Date.now() - startTime) / 1000;
-    console.error(`[wrapper] dev-mode error: ${e.message}`);
-    logDevWork(project, userMessage, elapsed, false);
-    return formatDevError('agentd', e.message, '試試: 查看 openclaw 的 git log / 重啟 openclaw 容器');
-  }
-}
 
 // ─── Work Progress ──────────────────────────────────────────────
 
@@ -1998,6 +1939,160 @@ function proxyPassThrough(req, res) {
 
 // ─── Main Handler ──────────────────────────────────────────────
 
+async function executeAgentdToolCall(toolName, toolArgs) {
+  switch (toolName) {
+    case 'git_log':
+      return callAgentd('/git/log', { repo: resolveProject(toolArgs.project) });
+    
+    case 'git_status':
+      return callAgentd('/git/status', { repo: resolveProject(toolArgs.project) });
+    
+    case 'git_diff':
+      return callAgentd('/git/diff', { repo: resolveProject(toolArgs.project) });
+    
+    case 'git_add':
+      return callAgentd('/git/add', { repo: resolveProject(toolArgs.project), files: toolArgs.files || ['-u'] });
+    
+    case 'git_commit':
+      return callAgentd('/git/commit', { repo: resolveProject(toolArgs.project), message: toolArgs.message || 'via OpenClaw' });
+    
+    case 'read_file':
+      return callAgentd('/fs/read', { path: toolArgs.path });
+    
+    case 'write_file':
+      return callAgentd('/fs/write', { path: toolArgs.path, content: toolArgs.content });
+    
+    case 'list_files':
+      return callAgentd('/fs/list', { path: resolveProject(toolArgs.project) });
+    
+    case 'docker_ps':
+      return callAgentd('/docker/ps', {});
+    
+    case 'docker_restart':
+      return callAgentd('/docker/restart', { container: resolveContainer(toolArgs.container) });
+    
+    case 'docker_logs':
+      return callAgentd('/docker/logs', { container: resolveContainer(toolArgs.container), tail: toolArgs.tail || 50 });
+    
+    case 'run_tests':
+      return callAgentd('/project/test', { repo: resolveProject(toolArgs.project) }, 120000);
+    
+    case 'system_info':
+      return callAgentd('/system/info', {}, null, 'GET');
+    
+    default:
+      throw new Error(`Unknown tool: ${toolName}`);
+  }
+}
+
+
+async function handleDevToolLoop(reqId, parsedBody, res, wantsStream, memoryContext, userText) {
+  const messages = parsedBody.messages || [];
+  const systemPrompt = injectBotSystemPrompt(messages.filter(m => m.role !== 'system'), null, memoryContext)[0];
+
+  const conversationMessages = messages
+    .filter(m => m.role !== 'system')
+    .map(m => ({
+      role: m.role,
+      content: normalizeContent(m.content)
+    }));
+
+  let allMessages = [systemPrompt, ...conversationMessages];
+  let iteration = 0;
+  const maxIterations = 5;
+  const startTime = Date.now();
+
+  try {
+    while (iteration < maxIterations) {
+      iteration++;
+      console.log(`[wrapper] #${reqId} dev-tool-loop iteration ${iteration}/${maxIterations}`);
+
+      // Call Claude with agentd tools available
+      const claudeResponse = await callClaudeNonStreaming(allMessages, AGENTD_TOOLS, 'auto');
+
+      if (claudeResponse.usage) {
+        trackTokenUsage(claudeResponse.model || 'claude-haiku-4-5', 'anthropic', claudeResponse.usage);
+      }
+
+      if (!claudeResponse.choices || !claudeResponse.choices[0]) {
+        throw new Error('Invalid Claude response');
+      }
+
+      const choice = claudeResponse.choices[0];
+      const finishReason = choice.finish_reason;
+      const content = choice.message?.content || '';
+
+      // Case 1: Claude wants to call a tool
+      if (finishReason === 'tool_calls' && choice.message?.tool_calls) {
+        const toolCalls = choice.message.tool_calls;
+        console.log(`[wrapper] #${reqId} dev-tools: ${toolCalls.length} calls: ${toolCalls.map(t => t.function.name).join(', ')}`);
+
+        allMessages.push({
+          role: 'assistant',
+          content,
+          tool_calls: toolCalls
+        });
+
+        const toolResults = [];
+        for (const toolCall of toolCalls) {
+          const toolName = toolCall.function.name;
+          const toolArgs = typeof toolCall.function.arguments === 'string'
+            ? JSON.parse(toolCall.function.arguments)
+            : toolCall.function.arguments;
+
+          try {
+            console.log(`[wrapper] #${reqId} dev-tool: ${toolName} args: ${JSON.stringify(toolArgs).slice(0, 80)}`);
+            const result = await executeAgentdToolCall(toolName, toolArgs);
+            const resultText = formatAgentdResult('dev-tool', result);
+
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content: resultText
+            });
+          } catch (e) {
+            console.error(`[wrapper] #${reqId} dev-tool error: ${toolName} - ${e.message}`);
+            toolResults.push({
+              type: 'tool_result',
+              tool_use_id: toolCall.id,
+              content: `[${toolName} 錯誤] ${e.message}`
+            });
+          }
+        }
+
+        allMessages.push({
+          role: 'user',
+          content: toolResults
+        });
+
+        continue;
+      }
+
+      // Case 2: Claude finished (stop)
+      if (finishReason === 'stop') {
+        const finalContent = content || '操作完成。';
+        const elapsed = (Date.now() - startTime) / 1000;
+        console.log(`[wrapper] #${reqId} dev-tool-loop done in ${elapsed.toFixed(1)}s`);
+        
+        return sendDirectResponse(reqId, finalContent, wantsStream, res);
+      }
+
+      console.warn(`[wrapper] #${reqId} unexpected finish_reason: ${finishReason}`);
+      const fallback = content || '完成操作。';
+      return sendDirectResponse(reqId, fallback, wantsStream, res);
+    }
+
+    console.error(`[wrapper] #${reqId} dev-tool max iterations (${maxIterations}) exceeded`);
+    return sendDirectResponse(reqId, '超過最大迭代次數，請簡化請求。', wantsStream, res);
+
+  } catch (e) {
+    console.error(`[wrapper] #${reqId} dev-tool-loop error: ${e.message}`);
+    metrics.errors++;
+    return sendDirectResponse(reqId, `[開發模式錯誤] ${e.message}`, wantsStream, res);
+  }
+}
+
+
 async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   // Ollama health check: restart if unresponsive
   const checkOllamaHealth = async () => {
@@ -2197,33 +2292,20 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
     }
   }
 
-  // Priority 1: Dev mode (highest) — smart intent with unified action words
-  const devIntent = detectDevIntent(userText);
-  if (devIntent && isAllowedPath(devIntent.projectDir)) {
+  // Priority 1: Dev mode (v11 - Tool Calling Loop)
+  if (shouldInjectDevTools(userText)) {
     if (!checkRateLimit('dev')) {
       console.log(`[wrapper] #${reqId} DEV RATE LIMITED`);
       skillContext = formatDevError('timeout', '請求過於頻繁', '等待幾分鐘後再試 (上限: 10次/5分鐘)');
     } else {
-      console.log(`[wrapper] #${reqId} DEV MODE [${devIntent.signal}]: project=${devIntent.projectDir}`);
-      saveLastProject(devIntent.projectDir);
+      console.log(`[wrapper] #${reqId} DEV TOOL LOOP: triggering`);
+      saveLastProject(userText);
       metrics.devMode++;
-      try {
-        const output = await executeDevCommand(devIntent.prompt, devIntent.projectDir, conversationContext);
-        // Store dev interaction in memory too
-        // if (userText && output) storeMemory(userText, output.slice(0, 500)); // Mem0 removed
-        return sendDirectResponse(reqId, output, wantsStream, res);
-      } catch (e) {
-        console.error(`[wrapper] #${reqId} dev error: ${e.message}`);
-        metrics.errors++;
-        skillContext = formatDevError('agentd', e.message);
-      }
+      return handleDevToolLoop(reqId, parsed, res, wantsStream, memoryContext, userText);
     }
-  } else if (devIntent && !isAllowedPath(devIntent.projectDir)) {
-    console.log(`[wrapper] #${reqId} dev BLOCKED: path not allowed: ${devIntent.projectDir}`);
-    skillContext = formatDevError('permission', `路徑不在白名單中: ${devIntent.projectDir}`, '允許的路徑: ~/Project/active_projects, ~/openclaw');
   }
 
-  // Priority 2: CLI tool routes (summarize, gh)
+  // Priority 2: CLI tool routes// Priority 2: CLI tool routes (summarize, gh)
   if (!skillContext) {
     const cliIntent = detectCliIntent(userText);
     if (cliIntent) {
