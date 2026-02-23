@@ -2097,8 +2097,25 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
     }
   }
 
-  
-  // Priority 1: Dev mode (highest) — smart intent with strong/weak signals
+
+  // Priority 0.9: Follow-up execution — user says "執行" after bot suggested 👉 commands
+  // Extract previous assistant's 👉 commands and execute the first one
+  const CONFIRM_WORDS = ['執行', '做', '做吧', '好', '好的', '繼續', '開始', '進行', '處理', 'do it', 'go', 'execute', 'proceed', 'yes', 'ok'];
+  const isShortConfirm = userText.length <= 10 && CONFIRM_WORDS.some(w => userText.toLowerCase().trim() === w || userText.toLowerCase().trim() === w + '吧');
+  if (isShortConfirm) {
+    // Find the last assistant message with 👉 commands
+    const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+    const assistantText = lastAssistant ? normalizeContent(lastAssistant.content) : '';
+    const suggestionMatch = assistantText.match(/👉\s*(.+)/);
+    if (suggestionMatch) {
+      const firstSuggestion = suggestionMatch[1].trim();
+      console.log(`[wrapper] #${reqId} FOLLOW-UP EXEC: "${userText}" → executing suggestion: "${firstSuggestion}"`);
+      // Re-route with the extracted suggestion as if user typed it directly
+      userText = firstSuggestion;
+    }
+  }
+
+  // Priority 1: Dev mode (highest) — smart intent with unified action words
   const devIntent = detectDevIntent(userText);
   if (devIntent && isAllowedPath(devIntent.projectDir)) {
     if (!checkRateLimit('dev')) {
