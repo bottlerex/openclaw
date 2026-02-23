@@ -1319,6 +1319,10 @@ async function parseDevIntent(userMessage, conversationContext) {
 "Docker 容器狀態" → {"intent":"docker_overview","target":""}
 "看 openclaw 的 logs" → {"intent":"show_logs","target":"openclaw"}
 "查看 taiwan-stock git diff" → {"intent":"show_git_diff","target":"taiwan-stock"}
+"進行台灣股票專案開發" → {"intent":"project_overview","target":"taiwan-stock"}
+"開始 openclaw 開發" → {"intent":"project_overview","target":"openclaw"}
+"看看 taiwan-stock 目前狀況" → {"intent":"project_overview","target":"taiwan-stock"}
+"openclaw 現在怎樣" → {"intent":"project_overview","target":"openclaw"}
 "今天天氣如何" → {"intent":"none","target":""}
 "你好" → {"intent":"none","target":""}
 
