@@ -1442,6 +1442,13 @@ async function executeDevCommand(userMessage, projectDir) {
 
       if (commitResult.error) {
         logDevWork(project, userMessage, elapsed, false);
+        // Provide helpful message for common failures
+        if (commitResult.error.includes('secret') || commitResult.error.includes('Potential secret')) {
+          return `[commit blocked] Pre-commit hook 偵測到 secret，已阻止提交。\n需要手動處理: 從 staged files 移除含有密鑰的檔案，或將密鑰改用環境變數。`;
+        }
+        if (commitResult.error.includes('nothing to commit')) {
+          return `沒有需要提交的改動（所有修改可能是 untracked 檔案，需要先 git add）`;
+        }
         return `[commit error] ${commitResult.error}`;
       }
 
