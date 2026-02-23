@@ -1286,7 +1286,7 @@ setInterval(async () => {
 }, 60000);
 
 // v10.3: Parse intent from user message using Ollama — improved prompt with few-shot
-async function parseDevIntent(userMessage) {
+async function parseDevIntent(userMessage, conversationContext) {
   const systemPrompt = `你是意圖分類器。根據用戶訊息，輸出 JSON。只輸出 JSON，不要解釋。
 
 可用意圖:
@@ -1320,13 +1320,19 @@ async function parseDevIntent(userMessage) {
 "看 openclaw 的 logs" → {"intent":"show_logs","target":"openclaw"}
 "查看 taiwan-stock git diff" → {"intent":"show_git_diff","target":"taiwan-stock"}
 "今天天氣如何" → {"intent":"none","target":""}
-"你好" → {"intent":"none","target":""}`;
+"你好" → {"intent":"none","target":""}
+
+帶上下文的範例（用戶訊息很短時，根據對話上下文判斷意圖）:
+上下文: [assistant] 建議: 👉 commit openclaw 的改動 / 用戶訊息: "執行" → {"intent":"git_commit","target":"openclaw"}
+上下文: [assistant] 建議: 👉 重啟 openclaw 容器 / 用戶訊息: "好" → {"intent":"restart_container","target":"openclaw"}
+上下文: [assistant] 建議: 👉 跑測試 taiwan-stock / 用戶訊息: "做" → {"intent":"test_and_analyze","target":"taiwan-stock"}
+上下文: [assistant] 建議: 👉 看 openclaw 的 logs / 用戶訊息: "繼續" → {"intent":"show_logs","target":"openclaw"}`;
 
   try {
     const ollamaResult = await ollamaRouter.tryOllamaChat(
       [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: `${fewShot}\n\n用戶訊息: "${userMessage}"` },
+        { role: 'user', content: `${fewShot}\n\n${conversationContext ? `對話上下文:\n${conversationContext}\n\n` : ''}用戶訊息: "${userMessage}"` },
       ],
       { model: 'qwen2.5-coder:7b' }
     );
@@ -1458,7 +1464,7 @@ ${projectData}` },
   });
 }
 
-async function executeDevCommand(userMessage, projectDir) {
+async function executeDevCommand(userMessage, projectDir, conversationContext) {
   const startTime = Date.now();
   const project = projectNameFromDir(projectDir);
 
@@ -1472,7 +1478,7 @@ async function executeDevCommand(userMessage, projectDir) {
   try {
     // 2. Parse intent via Ollama
     console.log(`[wrapper] dev-mode: parsing intent via Ollama`);
-    let intent = await parseDevIntent(userMessage);
+    let intent = await parseDevIntent(userMessage, conversationContext);
 
     if (!intent || !INTENT_MAP[intent.intent]) {
       // v10.3: Layered fallback — try project_overview, not blindly default
@@ -2098,26 +2104,22 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   }
 
 
-  // Priority 0.9: Follow-up execution — user says "執行" after bot suggested 👉 commands
-  // Search ALL assistant messages (reverse) for the most recent one with 👉 commands
-  const CONFIRM_WORDS = ['執行', '做', '做吧', '好', '好的', '繼續', '開始', '進行', '處理', 'do it', 'go', 'execute', 'proceed', 'yes', 'ok'];
-  const isShortConfirm = userText.length <= 10 && CONFIRM_WORDS.some(w => userText.toLowerCase().trim() === w || userText.toLowerCase().trim() === w + '吧');
-  if (isShortConfirm) {
-    // Search all assistant messages in reverse for the most recent 👉
-    const reversedMsgs = [...msgs].reverse();
-    let firstSuggestion = null;
-    for (const m of reversedMsgs) {
-      if (m.role !== 'assistant') continue;
+  // Priority 0.9: Short message context injection
+  // When user sends a short message (≤10 chars), build conversation context
+  // so Ollama intent parser can understand what the user is referring to
+  let conversationContext = null;
+  if (userText.length <= 10 && msgs.length >= 2) {
+    // Collect last 3 turns of conversation (assistant + user pairs)
+    const recentMsgs = msgs.slice(-6);
+    const contextParts = [];
+    for (const m of recentMsgs) {
+      if (m === lastUserMsg) continue; // skip current message
       const text = normalizeContent(m.content);
-      const match = text.match(/👉\s*(.+)/);
-      if (match) {
-        firstSuggestion = match[1].trim();
-        break;
-      }
+      if (text) contextParts.push(`[${m.role}]: ${text.slice(0, 500)}`);
     }
-    if (firstSuggestion) {
-      console.log(`[wrapper] #${reqId} FOLLOW-UP EXEC: "${userText}" → found suggestion in history: "${firstSuggestion}"`);
-      userText = firstSuggestion;
+    if (contextParts.length > 0) {
+      conversationContext = contextParts.join('\n');
+      console.log(`[wrapper] #${reqId} short msg "${userText}" — injecting ${contextParts.length} context messages`);
     }
   }
 
@@ -2132,7 +2134,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       saveLastProject(devIntent.projectDir);
       metrics.devMode++;
       try {
-        const output = await executeDevCommand(devIntent.prompt, devIntent.projectDir);
+        const output = await executeDevCommand(devIntent.prompt, devIntent.projectDir, conversationContext);
         // Store dev interaction in memory too
         // if (userText && output) storeMemory(userText, output.slice(0, 500)); // Mem0 removed
         return sendDirectResponse(reqId, output, wantsStream, res);
