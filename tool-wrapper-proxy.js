@@ -1318,6 +1318,65 @@ function formatAgentdResult(endpoint, result) {
   return JSON.stringify(result, null, 2);
 }
 
+// ─── Haiku Analysis for Infrastructure ────────────────────────────
+
+function analyzeWithHaiku(userQuestion, projectData) {
+  return new Promise((resolve, reject) => {
+    const systemPrompt = `你是 Mac mini 基礎設施顧問。根據蒐集到的專案資料，回答用戶問題。
+規則:
+- 繁體中文，簡短直接
+- 只根據提供的資料分析，不猜測
+- 給出具體可行的建議（最多 5 條）
+- 如果建議涉及執行命令，列出命令但說明「需要確認後執行」
+- 不要重複貼出原始資料`;
+
+    const body = JSON.stringify({
+      model: 'claude-haiku-4-5',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `用戶問題: ${userQuestion}
+
+蒐集到的資料:
+${projectData}` },
+      ],
+      max_tokens: 2000,
+      stream: false,
+    });
+
+    const req = http.request({
+      hostname: UPSTREAM_HOST,
+      port: UPSTREAM_PORT,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      timeout: 30000,
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          const content = parsed.choices?.[0]?.message?.content;
+          if (content) {
+            resolve(content);
+          } else {
+            reject(new Error('empty Haiku response'));
+          }
+        } catch (e) {
+          reject(new Error(`Haiku parse error: ${e.message}`));
+        }
+      });
+    });
+    req.on('error', (e) => reject(new Error(`Haiku unreachable: ${e.message}`)));
+    req.on('timeout', () => { req.destroy(); reject(new Error('Haiku timeout (30s)')); });
+    req.write(body);
+    req.end();
+  });
+}
+
 async function executeDevCommand(userMessage, projectDir) {
   const startTime = Date.now();
   const project = projectNameFromDir(projectDir);
@@ -1368,13 +1427,29 @@ async function executeDevCommand(userMessage, projectDir) {
     } else {
       result = await callAgentd(mapping.endpoint, params, null, mapping.method);
     }
-    const elapsed = (Date.now() - startTime) / 1000;
-
-    // 5. Format result
+    // 5. Format + analyze
     const formatted = formatAgentdResult(mapping.endpoint, result);
+
+    if (mapping.multi) {
+      // Observe done → Analyze via Haiku
+      console.log('[wrapper] dev-mode: sending to Haiku for analysis');
+      try {
+        const analysisResult = await analyzeWithHaiku(userMessage, formatted);
+        const elapsed = (Date.now() - startTime) / 1000;
+        console.log(`[wrapper] dev-mode: analysis done in ${elapsed.toFixed(1)}s`);
+        logDevWork(project, userMessage, elapsed, true);
+        return analysisResult;
+      } catch (e) {
+        console.error('[wrapper] dev-mode: Haiku analysis failed, returning raw data:', e.message);
+        const elapsed = (Date.now() - startTime) / 1000;
+        logDevWork(project, userMessage, elapsed, true);
+        return formatted;
+      }
+    }
+
+    const elapsed = (Date.now() - startTime) / 1000;
     console.log(`[wrapper] dev-mode: done in ${elapsed.toFixed(1)}s (job=${result.job_id})`);
     logDevWork(project, userMessage, elapsed, true);
-
     return formatted;
   } catch (e) {
     const elapsed = (Date.now() - startTime) / 1000;
