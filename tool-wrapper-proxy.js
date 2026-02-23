@@ -2099,18 +2099,24 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
 
 
   // Priority 0.9: Follow-up execution — user says "執行" after bot suggested 👉 commands
-  // Extract previous assistant's 👉 commands and execute the first one
+  // Search ALL assistant messages (reverse) for the most recent one with 👉 commands
   const CONFIRM_WORDS = ['執行', '做', '做吧', '好', '好的', '繼續', '開始', '進行', '處理', 'do it', 'go', 'execute', 'proceed', 'yes', 'ok'];
   const isShortConfirm = userText.length <= 10 && CONFIRM_WORDS.some(w => userText.toLowerCase().trim() === w || userText.toLowerCase().trim() === w + '吧');
   if (isShortConfirm) {
-    // Find the last assistant message with 👉 commands
-    const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
-    const assistantText = lastAssistant ? normalizeContent(lastAssistant.content) : '';
-    const suggestionMatch = assistantText.match(/👉\s*(.+)/);
-    if (suggestionMatch) {
-      const firstSuggestion = suggestionMatch[1].trim();
-      console.log(`[wrapper] #${reqId} FOLLOW-UP EXEC: "${userText}" → executing suggestion: "${firstSuggestion}"`);
-      // Re-route with the extracted suggestion as if user typed it directly
+    // Search all assistant messages in reverse for the most recent 👉
+    const reversedMsgs = [...msgs].reverse();
+    let firstSuggestion = null;
+    for (const m of reversedMsgs) {
+      if (m.role !== 'assistant') continue;
+      const text = normalizeContent(m.content);
+      const match = text.match(/👉\s*(.+)/);
+      if (match) {
+        firstSuggestion = match[1].trim();
+        break;
+      }
+    }
+    if (firstSuggestion) {
+      console.log(`[wrapper] #${reqId} FOLLOW-UP EXEC: "${userText}" → found suggestion in history: "${firstSuggestion}"`);
       userText = firstSuggestion;
     }
   }
