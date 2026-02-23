@@ -2122,17 +2122,13 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   const isConfirm = actualUserText.length <= 15 && CONFIRM_WORDS.some(w => lowerActual.includes(w));
   const wantsAll = lowerActual.includes('全部') || lowerActual.includes('all') || lowerActual.includes('都');
 
-  console.log(`[wrapper] #${reqId} confirm-check: actual="${actualUserText}" len=${actualUserText.length} isConfirm=${isConfirm} wantsAll=${wantsAll}`);
+  if (isConfirm) console.log(`[wrapper] #${reqId} confirm-check: actual="${actualUserText}" isConfirm=true wantsAll=${wantsAll}`);
   if (isConfirm && msgs.length >= 2) {
     // Extract all 👉 commands from conversation history
     const suggestions = [];
-    let assistantCount = 0;
     for (const m of [...msgs].reverse()) {
       if (m.role !== 'assistant') continue;
-      assistantCount++;
       const text = normalizeContent(m.content);
-      const has_pointer = text.includes('👉');
-      if (assistantCount <= 3) console.log(`[wrapper] #${reqId} assistant[${assistantCount}]: len=${text.length} has👉=${has_pointer} preview="${text.slice(0, 80)}"`);
       // Match 👉 only at start of line (actual suggestions, not inline text)
       const matches = text.match(/^👉\s*(.+)/gm);
       if (matches) {
@@ -2143,7 +2139,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
         break; // use the most recent assistant message with 👉
       }
     }
-    console.log(`[wrapper] #${reqId} suggestions found: ${suggestions.length} (searched ${assistantCount} assistant msgs)`);
+    if (suggestions.length > 0) console.log(`[wrapper] #${reqId} follow-up: found ${suggestions.length} suggestions`);
 
     if (suggestions.length > 0) {
       if (wantsAll) {
