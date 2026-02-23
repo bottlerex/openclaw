@@ -185,7 +185,7 @@ const PROJECT_ROUTES = [
   { keywords: ['sales-visit', 'sales visit', '業務拜訪', '拜訪'], dir: '~/Project/active_projects/sales-visit' },
   { keywords: ['central-hub', 'central hub', '中央', '控制中心'], dir: '~/Project/central-hub' },
   { keywords: ['channels', 'channel', '頻道'], dir: '~/Project/active_projects/channels' },
-  { keywords: ["mac mini", "mac-mini", "macmini", "主機", "伺服器", "server"], dir: "~" },
+  { keywords: ["mac mini", "mac-mini", "macmini", "主機", "伺服器", "server"], dir: "~/openclaw" },
 ];
 
 const ALLOWED_DEV_PATHS = [
@@ -897,7 +897,7 @@ function callSkill(skillName, params) {
       hostname: 'localhost',
       port: SKILL_API_PORT,
       path: `/api/v1/skills/${skillName}/execute`,
-      method: 'POST',
+      method: method || 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body)
@@ -918,7 +918,7 @@ function callSkill(skillName, params) {
     });
     req.on('error', (e) => reject(new Error(`Skill API unreachable: ${e.message}`)));
     req.on('timeout', () => { req.destroy(); reject(new Error('Skill timeout (15s)')); });
-    req.write(body);
+    if (method !== 'GET') req.write(body);
     req.end();
   });
 }
@@ -1119,6 +1119,7 @@ const INTENT_MAP = {
   'show_logs':         { endpoint: '/docker/logs',     paramsFn: (target) => ({ container: resolveContainer(target), tail: 50 }) },
   'run_tests':         { endpoint: '/project/test',    paramsFn: (target) => ({ repo: resolveProject(target) }) },
   'show_containers':   { endpoint: '/docker/ps',       paramsFn: () => ({}) },
+  'system_info':       { endpoint: '/system/info',     paramsFn: () => ({}), method: 'GET' },
   'git_add':           { endpoint: '/git/add',         paramsFn: (target, extra) => ({ repo: resolveProject(target), files: extra.files || ['.'] }) },
   'git_commit':        { endpoint: '/git/commit',      paramsFn: (target, extra) => ({ repo: resolveProject(target), message: extra.message }) },
 };
@@ -1159,23 +1160,27 @@ function resolveProject(target) {
   return '/Users/rexmacmini/openclaw';
 }
 
-function callAgentd(endpoint, params, timeout) {
+function callAgentd(endpoint, params, timeout, method) {
   return new Promise((resolve, reject) => {
     if (!AGENTD_TOKEN) {
       reject(new Error('agentd token not loaded'));
       return;
     }
-    const body = JSON.stringify(params);
+    const httpMethod = method || 'POST';
+    const body = httpMethod !== 'GET' ? JSON.stringify(params) : '';
+    const headers = {
+      'Authorization': `Bearer ${AGENTD_TOKEN}`,
+    };
+    if (httpMethod !== 'GET') {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(body);
+    }
     const req = http.request({
       hostname: AGENTD_HOST,
       port: AGENTD_PORT,
       path: endpoint,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${AGENTD_TOKEN}`,
-        'Content-Length': Buffer.byteLength(body),
-      },
+      method: httpMethod,
+      headers,
       timeout: timeout || AGENTD_TIMEOUT,
     }, (res) => {
       let data = '';
@@ -1195,7 +1200,7 @@ function callAgentd(endpoint, params, timeout) {
     });
     req.on('error', (e) => reject(new Error(`agentd unreachable: ${e.message}`)));
     req.on('timeout', () => { req.destroy(); reject(new Error('agentd timeout')); });
-    req.write(body);
+    if (httpMethod !== 'GET') req.write(body);
     req.end();
   });
 }
@@ -1255,6 +1260,7 @@ Available intents:
 - show_logs: view Docker container logs
 - run_tests: run project tests
 - show_containers: list all Docker containers
+- system_info: show system info (Claude Code version, models, uptime, status)
 - git_add: stage files for commit
 - git_commit: commit staged changes
 
@@ -1286,6 +1292,9 @@ If the message doesn't match any intent, respond: {"intent": "unknown"}`;
 }
 
 function formatAgentdResult(endpoint, result) {
+  if (result.hostname && result.claude_code_version) {
+    return `Mac mini (${result.hostname}) 系統資訊:\n- Claude Code: ${result.claude_code_version}\n- Node.js: ${result.node_version}\n- Platform: ${result.platform}/${result.arch}\n- Ollama 模型: ${result.ollama_models}\n- Docker 容器:\n${result.docker_containers}\n- 系統運行: ${result.system_uptime_hours} 小時\n- agentd 運行: ${result.agentd_uptime_seconds} 秒`;
+  }
   if (result.error) return `[error] ${result.error}`;
   if (result.log) return result.log;
   if (result.status !== undefined && typeof result.status === 'string') return result.status || '(clean)';
@@ -1329,7 +1338,7 @@ async function executeDevCommand(userMessage, projectDir) {
     console.log(`[wrapper] dev-mode: intent=${intent.intent} endpoint=${mapping.endpoint} params=${JSON.stringify(params)}`);
 
     // 4. Call agentd
-    const result = await callAgentd(mapping.endpoint, params);
+    const result = await callAgentd(mapping.endpoint, params, null, mapping.method);
     const elapsed = (Date.now() - startTime) / 1000;
 
     // 5. Format result

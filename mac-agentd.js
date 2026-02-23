@@ -411,6 +411,64 @@ routes['POST /project/test'] = async (body) => {
   }
 };
 
+
+// GET /system/info
+routes['GET /system/info'] = async () => {
+  const nodeVersion = process.version;
+  const platform = process.platform;
+  const arch = process.arch;
+  const hostname = require('os').hostname();
+  const uptime = require('os').uptime();
+  
+  // Get Claude Code version
+  let claudeVersion = 'unknown';
+  try {
+    const { execFileSync } = require('child_process');
+    claudeVersion = execFileSync('/opt/homebrew/bin/claude', ['--version'], {
+      timeout: 5000,
+      env: { ...process.env, PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin' },
+    }).toString().trim();
+  } catch (e) {
+    claudeVersion = 'not installed or error: ' + e.message;
+  }
+  
+  // Get Ollama models
+  let ollamaModels = 'unknown';
+  try {
+    const { execFileSync } = require('child_process');
+    ollamaModels = execFileSync('curl', ['-s', 'http://127.0.0.1:11434/api/tags'], {
+      timeout: 3000,
+    }).toString().trim();
+    const parsed = JSON.parse(ollamaModels);
+    ollamaModels = (parsed.models || []).map(m => m.name + ' (' + (m.size / 1e9).toFixed(1) + 'GB)').join(', ');
+  } catch (e) {
+    ollamaModels = 'error: ' + e.message;
+  }
+  
+  // Get Docker info
+  let dockerContainers = 'unknown';
+  try {
+    const { execFileSync } = require('child_process');
+    dockerContainers = execFileSync('/usr/local/bin/docker', ['ps', '--format', '{{.Names}}: {{.Status}}'], {
+      timeout: 5000,
+    }).toString().trim();
+  } catch (e) {
+    dockerContainers = 'error: ' + e.message;
+  }
+  
+  return {
+    hostname,
+    platform,
+    arch,
+    node_version: nodeVersion,
+    claude_code_version: claudeVersion,
+    ollama_models: ollamaModels,
+    docker_containers: dockerContainers,
+    system_uptime_hours: Math.round(uptime / 3600),
+    agentd_uptime_seconds: Math.round(process.uptime()),
+  };
+};
+
 // ─── HTTP Server ─────────────────────────────────────────────────
 
 function parseBody(req) {
