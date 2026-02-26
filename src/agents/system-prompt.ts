@@ -2,6 +2,7 @@ import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import { describeExecutionAuthority } from "../infra/execution-policy.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -191,6 +192,13 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
     "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
   ];
+}
+
+function buildExecutionPolicySection(params: { isMinimal: boolean }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  return ["## Execution Authority (Bounded Autonomy)", describeExecutionAuthority(), ""];
 }
 
 export function buildAgentSystemPrompt(params: {
@@ -647,6 +655,7 @@ export function buildAgentSystemPrompt(params: {
   }
 
   lines.push(
+    ...buildExecutionPolicySection({ isMinimal }),
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
