@@ -1,0 +1,5 @@
+# Observation period logs and reports
+/reports/
+*.log
+.DS_Store
+node_modules/
