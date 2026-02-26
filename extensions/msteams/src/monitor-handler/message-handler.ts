@@ -6,8 +6,10 @@ import {
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveDefaultGroupPolicy,
+  isDangerousNameMatchingEnabled,
   resolveMentionGating,
   formatAllowlistMatchMeta,
+  resolveEffectiveAllowFromLists,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import {
@@ -134,21 +136,28 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     // Check DM policy for direct messages.
     const dmAllowFrom = msteamsCfg?.allowFrom ?? [];
-    const effectiveDmAllowFrom = [...dmAllowFrom.map((v) => String(v)), ...storedAllowFrom];
+    const configuredDmAllowFrom = dmAllowFrom.map((v) => String(v));
+    const groupAllowFrom = msteamsCfg?.groupAllowFrom;
+    const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
+      allowFrom: configuredDmAllowFrom,
+      groupAllowFrom,
+      storeAllowFrom: storedAllowFrom,
+      dmPolicy,
+    });
+    const effectiveDmAllowFrom = resolvedAllowFromLists.effectiveAllowFrom;
     if (isDirectMessage && msteamsCfg) {
-      const allowFrom = dmAllowFrom;
-
       if (dmPolicy === "disabled") {
         log.debug?.("dropping dm (dms disabled)");
         return;
       }
 
       if (dmPolicy !== "open") {
-        const effectiveAllowFrom = [...allowFrom.map((v) => String(v)), ...storedAllowFrom];
+        const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
         const allowMatch = resolveMSTeamsAllowlistMatch({
-          allowFrom: effectiveAllowFrom,
+          allowFrom: effectiveDmAllowFrom,
           senderId,
           senderName,
+          allowNameMatching,
         });
 
         if (!allowMatch.allowed) {
@@ -180,15 +189,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       !isDirectMessage && msteamsCfg
         ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
         : "disabled";
-    const groupAllowFrom =
-      !isDirectMessage && msteamsCfg
-        ? (msteamsCfg.groupAllowFrom ??
-          (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0 ? msteamsCfg.allowFrom : []))
-        : [];
     const effectiveGroupAllowFrom =
-      !isDirectMessage && msteamsCfg
-        ? [...groupAllowFrom.map((v) => String(v)), ...storedAllowFrom]
-        : [];
+      !isDirectMessage && msteamsCfg ? resolvedAllowFromLists.effectiveGroupAllowFrom : [];
     const teamId = activity.channelData?.team?.id;
     const teamName = activity.channelData?.team?.name;
     const channelName = activity.channelData?.channel?.name;
@@ -226,10 +228,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           return;
         }
         if (effectiveGroupAllowFrom.length > 0) {
+          const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
           const allowMatch = resolveMSTeamsAllowlistMatch({
             allowFrom: effectiveGroupAllowFrom,
             senderId,
             senderName,
+            allowNameMatching,
           });
           if (!allowMatch.allowed) {
             log.debug?.("dropping group message (not in groupAllowFrom)", {
@@ -243,23 +247,26 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
+    const commandDmAllowFrom = isDirectMessage ? effectiveDmAllowFrom : configuredDmAllowFrom;
     const ownerAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
-      allowFrom: effectiveDmAllowFrom,
+      allowFrom: commandDmAllowFrom,
       senderId,
       senderName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const groupAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
       allowFrom: effectiveGroupAllowFrom,
       senderId,
       senderName,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
       authorizers: [
-        { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+        { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
         { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
       ],
       allowTextCommands: true,
@@ -526,17 +533,30 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
-        dispatcher,
-        replyOptions,
-      });
+      try {
+        const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions,
+        });
 
-      markDispatchIdle();
-      log.info("dispatch complete", { queuedFinal, counts });
+        log.info("dispatch complete", { queuedFinal, counts });
 
-      if (!queuedFinal) {
+        if (!queuedFinal) {
+          if (isRoomish && historyKey) {
+            clearHistoryEntriesIfEnabled({
+              historyMap: conversationHistories,
+              historyKey,
+              limit: historyLimit,
+            });
+          }
+          return;
+        }
+        const finalCount = counts.final;
+        logVerboseMessage(
+          `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
+        );
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
             historyMap: conversationHistories,
@@ -544,18 +564,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             limit: historyLimit,
           });
         }
-        return;
-      }
-      const finalCount = counts.final;
-      logVerboseMessage(
-        `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
-      );
-      if (isRoomish && historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: conversationHistories,
-          historyKey,
-          limit: historyLimit,
-        });
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          markDispatchIdle();
+        }
       }
     } catch (err) {
       log.error("dispatch failed", { error: String(err) });

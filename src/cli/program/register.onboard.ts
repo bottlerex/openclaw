@@ -7,6 +7,7 @@ import type {
   GatewayAuthChoice,
   GatewayBind,
   NodeManagerChoice,
+  SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { onboardCommand } from "../../commands/onboard.js";
@@ -74,6 +75,10 @@ export function registerOnboardCommand(program: Command) {
       "Auth profile id (non-interactive; default: <provider>:manual)",
     )
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
+    .option(
+      "--secret-input-mode <mode>",
+      "API key persistence mode: plaintext|ref (default: plaintext)",
+    )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
 
@@ -129,10 +134,12 @@ export function registerOnboardCommand(program: Command) {
           token: opts.token as string | undefined,
           tokenProfileId: opts.tokenProfileId as string | undefined,
           tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+          secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
           anthropicApiKey: opts.anthropicApiKey as string | undefined,
           openaiApiKey: opts.openaiApiKey as string | undefined,
           mistralApiKey: opts.mistralApiKey as string | undefined,
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
+          kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
           aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
           cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
           cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
