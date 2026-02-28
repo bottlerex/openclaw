@@ -55,6 +55,15 @@ let AUTH_TOKEN = null;
 
 function loadToken() {
   try {
+    // Enforce strict file permissions — only owner should read/write
+    const stat = fs.statSync(TOKEN_PATH);
+    const mode = stat.mode & 0o777;
+    if (mode & 0o077) {
+      console.warn(
+        `[agentd] WARNING: ${TOKEN_PATH} has loose permissions (${mode.toString(8)}), fixing to 600`,
+      );
+      fs.chmodSync(TOKEN_PATH, 0o600);
+    }
     AUTH_TOKEN = fs.readFileSync(TOKEN_PATH, "utf8").trim();
     if (AUTH_TOKEN.length < 32) {
       console.error("[agentd] FATAL: token too short (min 32 chars)");
@@ -84,7 +93,14 @@ function verifyToken(req) {
 }
 
 function isAllowedPath(p) {
-  const resolved = path.resolve(p);
+  let resolved;
+  try {
+    // Use realpath to resolve symlinks, preventing symlink escape attacks
+    resolved = fs.realpathSync(path.resolve(p));
+  } catch {
+    // Path doesn't exist yet (e.g. write target) — fall back to resolve only
+    resolved = path.resolve(p);
+  }
   return ALLOWED_PATHS.some((prefix) => resolved.startsWith(prefix));
 }
 

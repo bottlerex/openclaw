@@ -107,6 +107,22 @@ setInterval(() => {
   });
 }, TRACE_FLUSH_INTERVAL);
 
+// Flush remaining traces on process exit to prevent data loss
+function _flushTracesSync() {
+  if (_traceBuffer.length === 0) {
+    return;
+  }
+  try {
+    const batch = _traceBuffer.splice(0, _traceBuffer.length);
+    fs.appendFileSync(TRACE_LOG_PATH, batch.join("\n") + "\n");
+  } catch (e) {
+    console.error(`[trace] exit flush error: ${e.message}`);
+  }
+}
+process.on("SIGTERM", _flushTracesSync);
+process.on("SIGINT", _flushTracesSync);
+process.on("beforeExit", _flushTracesSync);
+
 // ─── P1.4: Config Manager — 統一管理敏感配置 ──────────────────────
 
 /**

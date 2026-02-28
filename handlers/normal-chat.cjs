@@ -29,11 +29,11 @@ module.exports = {
     const isForceOllama = forceModel === "ollama" || forceModel === "glm";
     const isForceClaude = forceModel === "claude" || forceModel === "opus";
 
-    // Await intent if pending
+    // Best-effort intent: 200ms budget, skip if slow (was 1200ms blocking)
     if (ctx.intentPromise && !ctx.intentHint) {
-      const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 1200));
+      const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 200));
       await Promise.race([ctx.intentPromise, timeout]);
-      if (ctx.req?.intent_hint?.source === "signal" && ctx.intentAbort) {
+      if (ctx.intentAbort) {
         ctx.intentAbort();
       }
     }

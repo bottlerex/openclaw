@@ -2,7 +2,7 @@
 // Phase 3.3: Signal layer integration — keyword hints bypass Ollama when high confidence
 // Phase 4.1: AbortController — cancel Ollama inference when signal resolves early
 
-const crypto = require("crypto");
+// crypto removed — replaced SHA256 cache key with djb2 hash
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
@@ -52,14 +52,14 @@ class IntentDetector {
     this._jsonExtract = /\{.*\}/s;
   }
 
-  // 生成快取鍵 (基於 hash)
+  // 生成快取鍵 (djb2 hash — fast, sufficient for 1000-entry LRU)
   getCacheKey(input, language) {
-    const hash = crypto
-      .createHash("sha256")
-      .update(input.toLowerCase() + ":" + language)
-      .digest("hex")
-      .slice(0, 16);
-    return this.cacheKeyPrefix + hash;
+    const str = input.toLowerCase() + ":" + language;
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) {
+      h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+    }
+    return this.cacheKeyPrefix + h.toString(36);
   }
 
   // 自動偵測語言
