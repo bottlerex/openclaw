@@ -40,6 +40,40 @@ const {
 } = require("./lib/openclaw-p0.2-last-dev-project.cjs");
 const { DecisionEngine } = require("./decision-engine.cjs");
 const { OllamaKeepalive } = require("./infra/ollama-keepalive.cjs");
+const {
+  updateDrift,
+  recordLatencyDrift,
+  recordFalseWarmDrift,
+  getDriftAnalysis,
+} = require("./routing/drift-detector.cjs");
+const {
+  updateMomentum,
+  getActiveMode,
+  getModeAdjustments,
+  getModeScores,
+  recordRoutingEvent,
+  recordModeSnapshot,
+  trackPrediction,
+} = require("./routing/intent-momentum.cjs");
+const {
+  extractIntent,
+  expectedCost,
+  learningRoute,
+  recordRoutingOutcome,
+  loadRoutingStats,
+  getLastSessionSpawn,
+  setLastSessionSpawn,
+} = require("./routing/self-learning-router.cjs");
+const {
+  recordTransition,
+  predictExecutor,
+  softPreWarm,
+  callSessionBridgeAPI,
+  loadTransitions,
+  getLastIntent,
+  setLastIntent,
+  PREDICTION_CONFIDENCE,
+} = require("./routing/predictive-router.cjs");
 
 const UPSTREAM_HOST = "localhost";
 const UPSTREAM_PORT = 3456;
@@ -2464,659 +2498,12 @@ function callAgentd(endpoint, params, timeout, method) {
 
 // ─── Session Bridge Integration ───────────────────────────────────────
 
-const SESSION_BRIDGE_PORT = 7788;
-const SESSION_BRIDGE_TIMEOUT = 180000; // 3 min max
-
 // ─── Session Gate — prevent spawn storm (max 1 concurrent session) ────
 let _activeSessions = 0;
 const MAX_CONCURRENT_SESSIONS = 1;
 const _sessionQueue = [];
 
-// ─── Anti-Thrashing Controls ────────────────────────────────────────
-let _lastSessionSpawn = 0;
-const SESSION_COOLDOWN_MS = 20000; // 20s between session spawns
-const SWITCH_THRESHOLD = 1.35; // hysteresis: 35% cost difference needed to switch
-const FAILURE_PENALTY = 1.8; // multiply cost by this on recent failure
-const _lastRouteByIntent = {}; // track last route per intent for hysteresis
-
-// ─── Self-Learning Router — adaptive routing based on execution history ────
-const ROUTING_STATS_PATH = path.join(
-  process.env.OPENCLAW_CONFIG_DIR || "/Users/rexmacmini/.openclaw",
-  "routing-stats.json",
-);
-const MIN_SAMPLES_FOR_LEARNING = 5; // fallback to rule-based below this
-
-function loadRoutingStats() {
-  try {
-    if (fs.existsSync(ROUTING_STATS_PATH)) {
-      return JSON.parse(fs.readFileSync(ROUTING_STATS_PATH, "utf8"));
-    }
-  } catch (e) {
-    console.error("[wrapper] Failed to load routing stats:", e.message);
-  }
-  return {};
-}
-
-function saveRoutingStats(stats) {
-  try {
-    fs.writeFileSync(ROUTING_STATS_PATH, JSON.stringify(stats, null, 2), "utf8");
-  } catch (e) {
-    console.error("[wrapper] Failed to save routing stats:", e.message);
-  }
-}
-
-// Intent fingerprint — stable, explainable, near-zero cost
-function extractIntent(text) {
-  const lower = text.toLowerCase();
-  if (/docker|container|image|volume/.test(lower)) {
-    return "docker";
-  }
-  if (/git|commit|diff|branch|push|pull|merge/.test(lower)) {
-    return "git";
-  }
-  if (/endpoint|api|feature|module|component/.test(lower)) {
-    return "implementation";
-  }
-  if (/memory|disk|process|cpu|系統|system_info/.test(lower)) {
-    return "system";
-  }
-  if (/deploy|部署|上線|release/.test(lower)) {
-    return "deploy";
-  }
-  if (/cleanup|清理|刪除|remove|prune/.test(lower)) {
-    return "cleanup";
-  }
-  if (/config|設定|configure/.test(lower)) {
-    return "config";
-  }
-  if (/test|測試|spec/.test(lower)) {
-    return "test";
-  }
-  if (/file|檔案|read|write|list|目錄|directory|backup|備份/.test(lower)) {
-    return "file_ops";
-  }
-  if (/install|安裝|update|更新|upgrade/.test(lower)) {
-    return "install";
-  }
-  if (/restart|重啟|start|stop|啟動|停止/.test(lower)) {
-    return "service_ops";
-  }
-  if (/refactor|重構|migrate|遷移|整合|integrate/.test(lower)) {
-    return "refactor";
-  }
-  if (/design|設計|architecture|架構/.test(lower)) {
-    return "design";
-  }
-  return "general";
-}
-
-// Expected cost = latency / success_rate (lower is better)
-function expectedCost(stats) {
-  if (!stats || stats.success + stats.fail === 0) {
-    return Infinity;
-  }
-  const successRate = stats.success / Math.max(1, stats.success + stats.fail);
-  return stats.avg_latency / Math.max(successRate, 0.2);
-}
-
-// Decide routing based on historical performance
-// Includes: hysteresis (anti-thrashing), failure penalty, cooldown enforcement
-// Returns: { route: "dev_loop"|"session_bridge", reason: string }
-function learningRoute(intent, ruleBasedDecision) {
-  const allStats = loadRoutingStats();
-  const intentStats = allStats[intent];
-
-  // Safety guard: not enough data → fallback to rule-based
-  if (!intentStats) {
-    return { route: ruleBasedDecision, reason: "no_history" };
-  }
-  const devSamples = intentStats.dev_loop
-    ? intentStats.dev_loop.success + intentStats.dev_loop.fail
-    : 0;
-  const sesSamples = intentStats.session_bridge
-    ? intentStats.session_bridge.success + intentStats.session_bridge.fail
-    : 0;
-
-  if (devSamples < MIN_SAMPLES_FOR_LEARNING && sesSamples < MIN_SAMPLES_FOR_LEARNING) {
-    return { route: ruleBasedDecision, reason: `low_samples(dev=${devSamples},ses=${sesSamples})` };
-  }
-
-  // Compute costs with failure penalty
-  let devCost = expectedCost(intentStats.dev_loop);
-  let sesCost = expectedCost(intentStats.session_bridge);
-
-  // Apply failure penalty: if recent failure rate > 30%, increase cost
-  if (intentStats.dev_loop && intentStats.dev_loop.fail > 0) {
-    const devFailRate =
-      intentStats.dev_loop.fail / (intentStats.dev_loop.success + intentStats.dev_loop.fail);
-    if (devFailRate > 0.3) {
-      devCost *= FAILURE_PENALTY;
-    }
-  }
-  if (intentStats.session_bridge && intentStats.session_bridge.fail > 0) {
-    const sesFailRate =
-      intentStats.session_bridge.fail /
-      (intentStats.session_bridge.success + intentStats.session_bridge.fail);
-    if (sesFailRate > 0.3) {
-      sesCost *= FAILURE_PENALTY;
-    }
-  }
-
-  // Mode bias: coding mode reduces session cost (favors Claude), ops mode increases it
-  const _lrMode = getActiveMode();
-  if (_lrMode) {
-    const _adj = getModeAdjustments(_lrMode);
-    sesCost *= _adj.sessionCostMultiplier;
-  }
-
-  // Cooldown enforcement: if session was spawned recently, bias toward dev_loop
-  const effectiveCooldown =
-    (_lrMode && getModeAdjustments(_lrMode).cooldownOverride) || SESSION_COOLDOWN_MS;
-  const timeSinceLastSession = Date.now() - _lastSessionSpawn;
-  if (timeSinceLastSession < effectiveCooldown) {
-    return {
-      route: "dev_loop",
-      reason: `cooldown(${Math.round((SESSION_COOLDOWN_MS - timeSinceLastSession) / 1000)}s remaining)`,
-    };
-  }
-
-  // Hysteresis: require SWITCH_THRESHOLD cost ratio to change from last route
-  const lastRoute = _lastRouteByIntent[intent];
-  let route;
-  if (lastRoute === "dev_loop" && sesCost < devCost / SWITCH_THRESHOLD) {
-    route = "session_bridge";
-  } else if (lastRoute === "session_bridge" && devCost < sesCost / SWITCH_THRESHOLD) {
-    route = "dev_loop";
-  } else if (lastRoute) {
-    // Not enough difference — stay on current route (stability)
-    route = lastRoute;
-  } else {
-    // No history — use cost comparison
-    route = devCost <= sesCost ? "dev_loop" : "session_bridge";
-  }
-
-  _lastRouteByIntent[intent] = route;
-  const switched = route !== ruleBasedDecision;
-  return {
-    route,
-    reason: `${switched ? "learned" : "confirmed"}(dev=${devCost.toFixed(1)},ses=${sesCost.toFixed(1)},hysteresis=${SWITCH_THRESHOLD},last=${lastRoute || "none"})`,
-  };
-}
-
-// Record execution outcome — called after task completes
-function recordRoutingOutcome(intent, executor, success, latencyMs) {
-  const allStats = loadRoutingStats();
-  if (!allStats[intent]) {
-    allStats[intent] = {};
-  }
-  if (!allStats[intent][executor]) {
-    allStats[intent][executor] = { success: 0, fail: 0, avg_latency: 0, samples: 0 };
-  }
-  const s = allStats[intent][executor];
-  s.samples = (s.samples || 0) + 1;
-  if (success) {
-    s.success++;
-  } else {
-    s.fail++;
-  }
-  // Exponential moving average for latency (alpha=0.3 for responsiveness)
-  const alpha = 0.3;
-  s.avg_latency = s.avg_latency === 0 ? latencyMs : s.avg_latency * (1 - alpha) + latencyMs * alpha;
-  saveRoutingStats(allStats);
-  console.log(
-    `[wrapper] ROUTING_FEEDBACK: intent=${intent} executor=${executor} success=${success} latency=${latencyMs}ms avg=${s.avg_latency.toFixed(0)}ms samples=${s.samples}`,
-  );
-}
-
-// ─── Intent Momentum — adaptive mode system with decay ────────────────
-const MODE_DECAY = 0.85; // decay factor per task
-const MODE_BOOST = 2; // boost for matching intent
-const MODE_PENALTY = -0.5; // penalty for non-matching
-const MODE_THRESHOLD = 3; // minimum score to activate mode
-
-const _modeScores = {
-  coding: 0, // implementation, refactor, design
-  ops: 0, // docker, service_ops, deploy, cleanup
-  debugging: 0, // git (diff/log), system, test
-  research: 0, // general, config, file_ops, install
-};
-
-// Map intents to modes
-const INTENT_TO_MODE = {
-  implementation: "coding",
-  refactor: "coding",
-  design: "coding",
-  docker: "ops",
-  service_ops: "ops",
-  deploy: "ops",
-  cleanup: "ops",
-  git: "debugging",
-  system: "debugging",
-  test: "debugging",
-  general: "research",
-  config: "research",
-  file_ops: "research",
-  install: "research",
-};
-
-function updateMomentum(intent) {
-  const targetMode = INTENT_TO_MODE[intent] || "research";
-
-  // Decay all scores
-  for (const mode of Object.keys(_modeScores)) {
-    _modeScores[mode] *= MODE_DECAY;
-  }
-  // Boost matching mode
-  _modeScores[targetMode] += MODE_BOOST;
-  // Small penalty to others (keeps modes competitive)
-  for (const mode of Object.keys(_modeScores)) {
-    if (mode !== targetMode) {
-      _modeScores[mode] += MODE_PENALTY;
-    }
-    if (_modeScores[mode] < 0) {
-      _modeScores[mode] = 0;
-    }
-  }
-}
-
-function getActiveMode() {
-  let best = null;
-  let bestScore = MODE_THRESHOLD; // must exceed threshold
-  for (const [mode, score] of Object.entries(_modeScores)) {
-    if (score > bestScore) {
-      best = mode;
-      bestScore = score;
-    }
-  }
-  return best; // null = no dominant mode
-}
-
-// Mode effects on routing parameters (only touches control plane)
-function getModeAdjustments(mode) {
-  switch (mode) {
-    case "coding":
-      return { sessionCostMultiplier: 0.8, cooldownOverride: 5000, predictionThreshold: 0.45 };
-    case "ops":
-      return { sessionCostMultiplier: 1.5, cooldownOverride: null, predictionThreshold: 0.7 };
-    case "debugging":
-      return { sessionCostMultiplier: 1.0, cooldownOverride: null, predictionThreshold: 0.6 };
-    case "research":
-      return { sessionCostMultiplier: 1.2, cooldownOverride: null, predictionThreshold: 0.65 };
-    default:
-      return {
-        sessionCostMultiplier: 1.0,
-        cooldownOverride: null,
-        predictionThreshold: PREDICTION_CONFIDENCE,
-      };
-  }
-}
-
-// ─── Control Plane Event Logging — append-only observability ──────────
-const CP_EVENTS_PATH = path.join(
-  process.env.OPENCLAW_CONFIG_DIR || "/Users/rexmacmini/.openclaw",
-  "routing-events.jsonl",
-);
-const CP_MODE_HISTORY_PATH = path.join(
-  process.env.OPENCLAW_CONFIG_DIR || "/Users/rexmacmini/.openclaw",
-  "mode-history.jsonl",
-);
-const _predictionTracker = { hits: 0, misses: 0, total: 0, falseWarms: 0 };
-const _routingEvents = []; // in-memory ring buffer (last 200)
-const MAX_EVENTS = 200;
-
-function recordRoutingEvent(event) {
-  event.ts = Date.now();
-  _routingEvents.push(event);
-  if (_routingEvents.length > MAX_EVENTS) {
-    _routingEvents.shift();
-  }
-  // Append to file (non-blocking)
-  try {
-    fs.appendFile(CP_EVENTS_PATH, JSON.stringify(event) + "\n", () => {});
-  } catch {}
-  updateDrift(event);
-}
-
-function recordModeSnapshot() {
-  const snapshot = {
-    ts: Date.now(),
-    mode: getActiveMode(),
-    scores: { ..._modeScores },
-    lastIntent: _lastIntent,
-  };
-  try {
-    fs.appendFile(CP_MODE_HISTORY_PATH, JSON.stringify(snapshot) + "\n", () => {});
-  } catch {}
-  return snapshot;
-}
-
-function trackPrediction(predicted, actual) {
-  if (!predicted) {
-    return;
-  } // no prediction made
-  _predictionTracker.total++;
-  if (predicted === actual) {
-    _predictionTracker.hits++;
-  } else {
-    _predictionTracker.misses++;
-    if (predicted === "session_bridge" && actual === "dev_loop") {
-      _predictionTracker.falseWarms++;
-    }
-  }
-  recordFalseWarmDrift(predicted === "session_bridge" && actual === "dev_loop");
-}
-
-// ─── Drift Detection ──────────────────────────────────────────────
-const DRIFT_ALPHA = 0.1;
-const DRIFT_BASELINE_MIN = 30;
-
-const _driftState = {
-  baselinePredAcc: null,
-  baselineLatency: null,
-  baselineSessionRatio: null,
-  baselineFalseWarm: null,
-  samplesForBaseline: 0,
-  currentPredAcc: null,
-  currentLatency: null,
-  currentSessionRatio: null,
-  currentFalseWarm: null,
-  recentModes: [],
-  lastStatsUpdate: Date.now(),
-  alerts: [],
-};
-
-function updateDrift(event) {
-  const s = _driftState;
-  s.samplesForBaseline++;
-  s.lastStatsUpdate = Date.now();
-  if (event.predicted) {
-    const hit = event.predicted === event.executor ? 1 : 0;
-    s.currentPredAcc =
-      s.currentPredAcc === null ? hit : s.currentPredAcc * (1 - DRIFT_ALPHA) + hit * DRIFT_ALPHA;
-  }
-  const isSes = event.executor === "session_bridge" ? 1 : 0;
-  s.currentSessionRatio =
-    s.currentSessionRatio === null
-      ? isSes
-      : s.currentSessionRatio * (1 - DRIFT_ALPHA) + isSes * DRIFT_ALPHA;
-  if (event.mode) {
-    s.recentModes.push(event.mode);
-    if (s.recentModes.length > 20) {
-      s.recentModes.shift();
-    }
-  }
-  if (s.samplesForBaseline === DRIFT_BASELINE_MIN) {
-    s.baselinePredAcc = s.currentPredAcc;
-    s.baselineSessionRatio = s.currentSessionRatio;
-  }
-  if (s.samplesForBaseline > DRIFT_BASELINE_MIN) {
-    checkDriftAlerts();
-  }
-}
-
-function recordLatencyDrift(latencyMs) {
-  const s = _driftState;
-  s.currentLatency =
-    s.currentLatency === null
-      ? latencyMs
-      : s.currentLatency * (1 - DRIFT_ALPHA) + latencyMs * DRIFT_ALPHA;
-  if (s.samplesForBaseline === DRIFT_BASELINE_MIN && s.baselineLatency === null) {
-    s.baselineLatency = s.currentLatency;
-  }
-}
-
-function recordFalseWarmDrift(isFalseWarm) {
-  const s = _driftState;
-  const v = isFalseWarm ? 1 : 0;
-  s.currentFalseWarm =
-    s.currentFalseWarm === null ? v : s.currentFalseWarm * (1 - DRIFT_ALPHA) + v * DRIFT_ALPHA;
-  if (s.samplesForBaseline === DRIFT_BASELINE_MIN && s.baselineFalseWarm === null) {
-    s.baselineFalseWarm = s.currentFalseWarm;
-  }
-}
-
-function checkDriftAlerts() {
-  const s = _driftState;
-  const now = Date.now();
-  const alerts = [];
-  if (s.baselinePredAcc !== null && s.currentPredAcc !== null) {
-    const drop = s.baselinePredAcc - s.currentPredAcc;
-    if (drop > 0.15) {
-      alerts.push({
-        type: "pred_accuracy",
-        severity: drop > 0.25 ? "critical" : "warning",
-        msg: "預測準確率下降 " + (drop * 100).toFixed(0) + "%",
-        baseline: s.baselinePredAcc,
-        current: s.currentPredAcc,
-      });
-    }
-  }
-  if (s.baselineLatency !== null && s.currentLatency !== null) {
-    const inc = (s.currentLatency - s.baselineLatency) / s.baselineLatency;
-    if (inc > 0.3) {
-      alerts.push({
-        type: "latency",
-        severity: inc > 0.5 ? "critical" : "warning",
-        msg: "延遲上升 " + (inc * 100).toFixed(0) + "%",
-        baseline: s.baselineLatency,
-        current: s.currentLatency,
-      });
-    }
-  }
-  if (s.recentModes.length >= 10) {
-    let sw = 0;
-    for (let i = 1; i < s.recentModes.length; i++) {
-      if (s.recentModes[i] !== s.recentModes[i - 1]) {
-        sw++;
-      }
-    }
-    const rate = sw / (s.recentModes.length - 1);
-    if (rate > 0.25) {
-      alerts.push({
-        type: "mode_oscillation",
-        severity: rate > 0.4 ? "critical" : "warning",
-        msg: "模式震盪率 " + (rate * 100).toFixed(0) + "%",
-        rate,
-      });
-    }
-  }
-  if (s.baselineSessionRatio !== null && s.currentSessionRatio !== null) {
-    const shift = Math.abs(s.currentSessionRatio - s.baselineSessionRatio);
-    if (shift > 0.2) {
-      alerts.push({
-        type: "executor_imbalance",
-        severity: shift > 0.35 ? "critical" : "warning",
-        msg: "執行器比例偏移 " + (shift * 100).toFixed(0) + "%",
-        baseline: s.baselineSessionRatio,
-        current: s.currentSessionRatio,
-      });
-    }
-  }
-  if (now - s.lastStatsUpdate > 2 * 3600 * 1000) {
-    alerts.push({
-      type: "staleness",
-      severity: "warning",
-      msg: "學習數據已 " + ((now - s.lastStatsUpdate) / 3600000).toFixed(1) + "h 未更新",
-    });
-  }
-  if (s.currentFalseWarm !== null && s.currentFalseWarm > 0.3) {
-    alerts.push({
-      type: "false_warm",
-      severity: s.currentFalseWarm > 0.45 ? "critical" : "warning",
-      msg: "誤預熱率 " + (s.currentFalseWarm * 100).toFixed(0) + "%",
-      rate: s.currentFalseWarm,
-    });
-  }
-  for (const a of alerts) {
-    a.ts = now;
-    const idx = s.alerts.findIndex((x) => x.type === a.type);
-    if (idx !== -1) {
-      s.alerts[idx] = a;
-    } else {
-      s.alerts.push(a);
-    }
-    if (s.alerts.length > 50) {
-      s.alerts.shift();
-    }
-  }
-  const activeTypes = new Set(alerts.map((a) => a.type));
-  s.alerts = s.alerts.filter((a) => activeTypes.has(a.type) || now - a.ts < 600000);
-}
-
-function getDriftAnalysis() {
-  const s = _driftState;
-  const msr =
-    s.recentModes.length >= 2
-      ? (() => {
-          let sw = 0;
-          for (let i = 1; i < s.recentModes.length; i++) {
-            if (s.recentModes[i] !== s.recentModes[i - 1]) {
-              sw++;
-            }
-          }
-          return ((sw / (s.recentModes.length - 1)) * 100).toFixed(1) + "%";
-        })()
-      : null;
-  return {
-    status: s.alerts.some((a) => a.severity === "critical")
-      ? "critical"
-      : s.alerts.length > 0
-        ? "warning"
-        : "healthy",
-    samples: s.samplesForBaseline,
-    baselineEstablished: s.samplesForBaseline >= DRIFT_BASELINE_MIN,
-    baselines: {
-      predAccuracy: s.baselinePredAcc !== null ? (s.baselinePredAcc * 100).toFixed(1) + "%" : null,
-      latency: s.baselineLatency !== null ? Math.round(s.baselineLatency) + "ms" : null,
-      sessionRatio:
-        s.baselineSessionRatio !== null ? (s.baselineSessionRatio * 100).toFixed(1) + "%" : null,
-      falseWarmRate:
-        s.baselineFalseWarm !== null ? (s.baselineFalseWarm * 100).toFixed(1) + "%" : null,
-    },
-    current: {
-      predAccuracy: s.currentPredAcc !== null ? (s.currentPredAcc * 100).toFixed(1) + "%" : null,
-      latency: s.currentLatency !== null ? Math.round(s.currentLatency) + "ms" : null,
-      sessionRatio:
-        s.currentSessionRatio !== null ? (s.currentSessionRatio * 100).toFixed(1) + "%" : null,
-      falseWarmRate:
-        s.currentFalseWarm !== null ? (s.currentFalseWarm * 100).toFixed(1) + "%" : null,
-      modeSwitchRate: msr,
-    },
-    alerts: s.alerts,
-    lastUpdate: s.lastStatsUpdate,
-  };
-}
-
-// ─── Predictive Routing — task transition tracking + executor prediction ───
-const TRANSITIONS_PATH = path.join(
-  process.env.OPENCLAW_CONFIG_DIR || "/Users/rexmacmini/.openclaw",
-  "task-transitions.json",
-);
-const PREDICTION_CONFIDENCE = 0.6; // minimum probability to act on prediction
-let _lastIntent = null;
-
-function loadTransitions() {
-  try {
-    if (fs.existsSync(TRANSITIONS_PATH)) {
-      return JSON.parse(fs.readFileSync(TRANSITIONS_PATH, "utf8"));
-    }
-  } catch (e) {
-    console.error("[wrapper] Failed to load transitions:", e.message);
-  }
-  return {};
-}
-
-function saveTransitions(data) {
-  try {
-    fs.writeFileSync(TRANSITIONS_PATH, JSON.stringify(data, null, 2), "utf8");
-  } catch (e) {
-    console.error("[wrapper] Failed to save transitions:", e.message);
-  }
-}
-
-// Record intent-to-executor transition (not intent-to-intent)
-function recordTransition(intent, executor) {
-  if (!intent) {
-    return;
-  }
-  const data = loadTransitions();
-  if (!data[intent]) {
-    data[intent] = { dev_loop: 0, session_bridge: 0 };
-  }
-  data[intent][executor] = (data[intent][executor] || 0) + 1;
-  saveTransitions(data);
-}
-
-// Predict which executor the next task for this intent will need
-// Returns: "session_bridge" | null (null = no prediction / not confident enough)
-function predictExecutor(intent) {
-  const data = loadTransitions();
-  const stats = data[intent];
-  if (!stats) {
-    return null;
-  }
-
-  const total = (stats.dev_loop || 0) + (stats.session_bridge || 0);
-  if (total < MIN_SAMPLES_FOR_LEARNING) {
-    return null;
-  }
-
-  const probSession = (stats.session_bridge || 0) / total;
-  if (probSession > PREDICTION_CONFIDENCE) {
-    return "session_bridge";
-  }
-  return null;
-}
-
-// Soft pre-warm: notify session bridge to prepare (non-blocking)
-function softPreWarm(project) {
-  // Fire-and-forget: just ping session bridge health to keep connection warm
-  // In future: can send prepare signal with project context
-  callSessionBridgeAPI("GET", "/health", null).catch(() => {});
-  console.log(
-    "[wrapper] PREDICTIVE_PREWARM: pinged session-bridge" + (project ? " for " + project : ""),
-  );
-}
-
-function callSessionBridgeAPI(method, path, body) {
-  return new Promise((resolve, reject) => {
-    const postBody = body ? JSON.stringify(body) : "";
-    const opts = {
-      hostname: "127.0.0.1",
-      port: SESSION_BRIDGE_PORT,
-      path,
-      method,
-      headers: { "Content-Type": "application/json" },
-      timeout: SESSION_BRIDGE_TIMEOUT,
-    };
-    if (method !== "GET") {
-      opts.headers["Content-Length"] = Buffer.byteLength(postBody);
-    }
-    const req = http.request(opts, (res) => {
-      let data = "";
-      res.on("data", (chunk) => {
-        data += chunk;
-      });
-      res.on("end", () => {
-        try {
-          resolve({ ...JSON.parse(data), _status: res.statusCode });
-        } catch {
-          reject(new Error("session-bridge invalid response"));
-        }
-      });
-    });
-    req.on("error", (e) => reject(new Error(`session-bridge unreachable: ${e.message}`)));
-    req.on("timeout", () => {
-      req.destroy();
-      reject(new Error("session-bridge timeout"));
-    });
-    if (method !== "GET") {
-      req.write(postBody);
-    }
-    req.end();
-  });
-}
-
+// ─── Routing subsystem loaded from routing/ modules ────
 // ---------------------------------------------------------------------------
 // Bounded Autonomy v1 — Policy Interceptor + Safety Guards
 // ---------------------------------------------------------------------------
@@ -4746,7 +4133,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
 
       // --- Step 2: Intent fingerprint + learning router ---
       const cpIntent = extractIntent(userText);
-      _lastIntent = cpIntent;
+      setLastIntent(cpIntent);
       const { route: finalRoute, reason: routeReason } = learningRoute(cpIntent, ruleBasedDecision);
 
       // Detect project from PROJECT_ROUTES
@@ -4774,7 +4161,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
 
       // --- Observability ---
       const modeStr = activeMode
-        ? `${activeMode}(${Object.entries(_modeScores)
+        ? `${activeMode}(${Object.entries(getModeScores())
             .map(([k, v]) => k[0] + "=" + v.toFixed(1))
             .join(",")})`
         : "none";
@@ -4791,7 +4178,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
         complexityScore,
         ruleDecision: ruleBasedDecision,
         mode: activeMode,
-        modeScores: { ..._modeScores },
+        modeScores: { ...getModeScores() },
         reason: routeReason,
         predicted: predictedExec,
         project: cpProject || null,
@@ -4799,7 +4186,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       // Track prediction accuracy
       trackPrediction(predictedExec, finalRoute);
       // Record mode snapshot
-      recordModeSnapshot();
+      recordModeSnapshot(getLastIntent());
 
       const cpStartTime = Date.now();
 
@@ -4813,7 +4200,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
         } else {
           // → Slow Path: Session Bridge (Claude Code) for deliberative tasks
           console.log(`[wrapper] #${reqId} CONTROL_PLANE_SESSION: routing to session-bridge`);
-          _lastSessionSpawn = Date.now();
+          setLastSessionSpawn(Date.now());
           _activeSessions++;
           const sbSpan = traceSpan(trace, "session_bridge");
           try {
@@ -5934,9 +5321,9 @@ const server = http.createServer((req, res) => {
       JSON.stringify(
         {
           activeMode: getActiveMode(),
-          scores: _modeScores,
+          scores: getModeScores(),
           adjustments: getModeAdjustments(getActiveMode()),
-          lastIntent: _lastIntent,
+          lastIntent: getLastIntent(),
         },
         null,
         2,
