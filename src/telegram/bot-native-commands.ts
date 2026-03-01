@@ -40,7 +40,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { withTelegramApiErrorLogging, withTelegramApiRetry } from "./api-logging.js";
 import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import {
   buildCappedTelegramMenuCommands,
@@ -531,7 +531,7 @@ export const registerTelegramNativeCommands = ({
               );
             }
             const replyMarkup = buildInlineKeyboard(rows);
-            await withTelegramApiErrorLogging({
+            await withTelegramApiRetry({
               operation: "sendMessage",
               runtime,
               fn: () =>
@@ -539,6 +539,7 @@ export const registerTelegramNativeCommands = ({
                   ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
                   ...threadParams,
                 }),
+              maxAttempts: 3,
             });
             return;
           }
@@ -676,10 +677,11 @@ export const registerTelegramNativeCommands = ({
           const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
           const match = matchPluginCommand(commandBody);
           if (!match) {
-            await withTelegramApiErrorLogging({
+            await withTelegramApiRetry({
               operation: "sendMessage",
               runtime,
               fn: () => bot.api.sendMessage(chatId, "Command not found."),
+              maxAttempts: 3,
             });
             return;
           }
