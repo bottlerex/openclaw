@@ -21,6 +21,7 @@ import { danger, logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withTelegramApiRetry } from "./api-logging.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -405,7 +406,13 @@ export const dispatchTelegramMessage = async ({
       });
     },
     deletePreviewMessage: async (messageId) => {
-      await bot.api.deleteMessage(chatId, messageId);
+      await withTelegramApiRetry({
+        operation: "deleteMessage",
+        runtime,
+        fn: () => bot.api.deleteMessage(chatId, messageId),
+      }).catch((err) => {
+        logVerbose(`telegram: failed to delete preview message ${messageId}: ${String(err)}`);
+      });
     },
     log: logVerbose,
     markDelivered: () => {
@@ -634,22 +641,26 @@ export const dispatchTelegramMessage = async ({
       }
     }
     for (const archivedPreview of archivedAnswerPreviews) {
-      try {
-        await bot.api.deleteMessage(chatId, archivedPreview.messageId);
-      } catch (err) {
+      await withTelegramApiRetry({
+        operation: "deleteMessage",
+        runtime,
+        fn: () => bot.api.deleteMessage(chatId, archivedPreview.messageId),
+      }).catch((err) => {
         logVerbose(
           `telegram: archived answer preview cleanup failed (${archivedPreview.messageId}): ${String(err)}`,
         );
-      }
+      });
     }
     for (const messageId of archivedReasoningPreviewIds) {
-      try {
-        await bot.api.deleteMessage(chatId, messageId);
-      } catch (err) {
+      await withTelegramApiRetry({
+        operation: "deleteMessage",
+        runtime,
+        fn: () => bot.api.deleteMessage(chatId, messageId),
+      }).catch((err) => {
         logVerbose(
           `telegram: archived reasoning preview cleanup failed (${messageId}): ${String(err)}`,
         );
-      }
+      });
     }
   }
   let sentFallback = false;
