@@ -20,16 +20,14 @@ services:
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
-      - TOOLS_ALLOW=calendar,gmail,drive,web,file,email
+      # Tools configured in openclaw.json (exec/read/write/edit via CLIProxyAPI)
       - ENABLE_CALENDAR=true
       - ENABLE_GMAIL=true
       - ENABLE_DRIVE=true
       - CALENDAR_CACHE_PATH=/home/node/calendar_cache
       - SCHEDULE_DAILY_DIGEST=09:00
       - TIMEZONE=Asia/Taipei
-      - OPENCLAW_PRIMARY_MODEL=openai/claude-proxy
-      - OPENAI_BASE_URL=http://host.docker.internal:3457/v1
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENCLAW_PRIMARY_MODEL=cliproxy/claude-haiku-4-5-20251001
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --dns-result-order=ipv4first
@@ -46,6 +44,9 @@ services:
       - ./calendar_cache:/home/node/calendar_cache
       - ./gog-cli/gog:/usr/local/bin/gog:ro
       - ./gog-config:/home/node/.config/gogcli
-      - ./ssh-keys:/home/node/.ssh:ro
+      - ./ssh-keys:/home/node/.ssh
+      - /Users/rexmacmini/.claude/projects/-Users-rexmacmini/memory:/home/node/claude-memory:ro
+      - /Users/rexmacmini/.claude/rules:/home/node/claude-rules:ro
+      - /Users/rexmacmini/Project/active_projects:/home/node/projects
     extra_hosts:
       - host.docker.internal:host-gateway
