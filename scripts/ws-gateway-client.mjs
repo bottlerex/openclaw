@@ -71,7 +71,7 @@ function parseCommand(parts) {
 
   switch (method) {
     case "chat.send":
-      return { method, params: { text: parts.slice(1).join(" ") || "ping" } };
+      return { method, params: { sessionKey: "agent:main:main", message: parts.slice(1).join(" ") || "ping", idempotencyKey: crypto.randomUUID() } };
     case "chat.history":
       return { method, params: { limit: parseInt(parts[1]) || 20 } };
     case "chat.abort":
