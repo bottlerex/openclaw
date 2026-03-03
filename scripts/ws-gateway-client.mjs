@@ -17,15 +17,18 @@
  *
  * Environment:
  *   OPENCLAW_GATEWAY_URL   ws://127.0.0.1:18789
+ *   OPENCLAW_IDENTITY_FILE device.json path (overrides IDENTITY_DIR)
  *   OPENCLAW_IDENTITY_DIR  /home/node/.openclaw/identity
  *   OPENCLAW_CONFIG        /home/node/.openclaw/openclaw.json
  */
 import WebSocket from "ws";
 import crypto from "crypto";
 import fs from "fs";
+import path from "path";
 import readline from "readline";
 
 const GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL || "ws://127.0.0.1:18789";
+const IDENTITY_FILE = process.env.OPENCLAW_IDENTITY_FILE || "";
 const IDENTITY_DIR = process.env.OPENCLAW_IDENTITY_DIR || "/home/node/.openclaw/identity";
 const CONFIG_PATH = process.env.OPENCLAW_CONFIG || "/home/node/.openclaw/openclaw.json";
 
@@ -37,7 +40,8 @@ const positional = args.filter(a => !a.startsWith("-"));
 
 // --- Auth setup ---
 
-const deviceConfig = JSON.parse(fs.readFileSync(`${IDENTITY_DIR}/device.json`, "utf-8"));
+const devicePath = IDENTITY_FILE || path.join(IDENTITY_DIR, "device.json");
+const deviceConfig = JSON.parse(fs.readFileSync(devicePath, "utf-8"));
 const openclawConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
 
 const { deviceId, privateKeyPem, publicKeyPem } = deviceConfig;
