@@ -90,11 +90,11 @@ function parseCommand(parts) {
     case "sessions.preview":
       return { method, params: { sessionId: parts[1] || "main" } };
     case "sessions.delete":
-      return { method, params: { sessionKey: parts[1] } };
+      return { method, params: { key: parts[1] } };
     case "sessions.reset":
-      return { method, params: { sessionKey: parts[1] } };
+      return { method, params: { key: parts[1] } };
     case "sessions.compact":
-      return { method, params: { sessionKey: parts[1] } };
+      return { method, params: { key: parts[1] } };
     case "sessions.patch":
       return { method, params: { sessionKey: parts[1], ...JSON.parse(parts[2] || "{}") } };
     case "sessions.resolve":
