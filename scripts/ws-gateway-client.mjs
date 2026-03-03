@@ -174,7 +174,7 @@ function parseCommand(parts) {
     case "node.list":
       return { method, params: {} };
     case "node.invoke":
-      return { method, params: { nodeId: parts[1], method: parts[2], args: JSON.parse(parts[3] || "{}") } };
+      return { method, params: { nodeId: parts[1], command: parts[2], params: JSON.parse(parts[3] || "{}"), idempotencyKey: crypto.randomUUID() } };
     case "node.describe":
       return { method, params: { nodeId: parts[1] } };
     case "node.rename":

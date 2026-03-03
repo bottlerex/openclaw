@@ -8,7 +8,7 @@
 #   oc channels.status          # channel status
 #   oc chat.history 10          # last 10 messages
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 export OPENCLAW_IDENTITY_FILE="${PROJECT_DIR}/config/identity/cli-device.json"
