@@ -22,10 +22,11 @@ bash /home/node/.openclaw/scripts/host-exec.sh "docker ps --format 'table {{.Nam
 ### Backup verification
 
 ```bash
-bash /home/node/.openclaw/scripts/backup-verify.sh
+bash /home/node/.openclaw/scripts/host-exec.sh "bash ~/openclaw/config/scripts/backup-verify.sh"
 ```
 
 Returns JSON with status (ok/warning/critical) and checks array.
+Note: Must run via host-exec.sh because it checks Docker and crontab on the host.
 
 ### Gateway monitoring
 
