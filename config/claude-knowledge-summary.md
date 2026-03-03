@@ -1,7 +1,7 @@
 # Claude Knowledge Summary (Auto-generated)
 
 > **source**: claude
-> **synced_at**: 2026-03-02T02:00:00Z
+> **synced_at**: 2026-03-03T10:00:01Z
 > **authority**: read-only
 > **warning**: This file is auto-generated. Do NOT edit manually.
 
@@ -18,6 +18,7 @@
 | **Cognitive Architecture v4.1** | ✅ 部署 | 2026-03-01 |
 | **v4.1 觀察期** | 進行中 | 2026-03-01 ~ 03-05 |
 | **通用專案狀態追蹤** | ✅ 就位 | 2026-03-01 |
+| **Enforcement Kernel v1.2** | ✅ 部署 | 2026-03-02 |
 
 ## Active Work (Current Status)
 
