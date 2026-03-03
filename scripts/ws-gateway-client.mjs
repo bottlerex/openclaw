@@ -112,7 +112,7 @@ function parseCommand(parts) {
     case "agents.list":
       return { method, params: {} };
     case "agents.create":
-      return { method, params: { id: parts[1], ...JSON.parse(parts[2] || "{}") } };
+      return { method, params: { name: parts[1], workspace: parts[1], ...JSON.parse(parts[2] || "{}") } };
     case "agents.update":
       return { method, params: { id: parts[1], ...JSON.parse(parts[2] || "{}") } };
     case "agents.delete":
@@ -120,7 +120,7 @@ function parseCommand(parts) {
 
     // --- Config ---
     case "config.get":
-      return { method, params: { path: parts[1] || "" } };
+      return { method, params: {} };
     case "config.set":
       return { method, params: { path: parts[1], value: JSON.parse(parts[2] || "null") } };
     case "config.patch":
