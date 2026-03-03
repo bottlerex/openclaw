@@ -74,30 +74,140 @@ function parseCommand(parts) {
   if (!method) return null;
 
   switch (method) {
+    // --- Chat ---
     case "chat.send":
-      return { method, params: { sessionKey: "agent:main:main", message: parts.slice(1).join(" ") || "ping", idempotencyKey: crypto.randomUUID() } };
+      return { method, params: { sessionKey: parts[2] ? parts[1] : "agent:main:main", message: parts[2] || parts.slice(1).join(" ") || "ping", idempotencyKey: crypto.randomUUID() } };
     case "chat.history":
       return { method, params: { limit: parseInt(parts[1]) || 20 } };
     case "chat.abort":
       return { method, params: {} };
+    case "chat.inject":
+      return { method, params: { sessionKey: parts[1] || "agent:main:main", role: parts[2] || "user", text: parts.slice(3).join(" ") || "" } };
+
+    // --- Sessions ---
     case "sessions.list":
       return { method, params: {} };
     case "sessions.preview":
       return { method, params: { sessionId: parts[1] || "main" } };
+    case "sessions.delete":
+      return { method, params: { sessionKey: parts[1] } };
+    case "sessions.reset":
+      return { method, params: { sessionKey: parts[1] } };
+    case "sessions.compact":
+      return { method, params: { sessionKey: parts[1] } };
+    case "sessions.patch":
+      return { method, params: { sessionKey: parts[1], ...JSON.parse(parts[2] || "{}") } };
+    case "sessions.resolve":
+      return { method, params: { sessionKey: parts[1] } };
+    case "sessions.usage":
+      return { method, params: {} };
+
+    // --- Channels ---
     case "channels.status":
       return { method, params: {} };
+    case "channels.logout":
+      return { method, params: { channel: parts[1] } };
+
+    // --- Agents ---
     case "agents.list":
       return { method, params: {} };
+    case "agents.create":
+      return { method, params: { id: parts[1], ...JSON.parse(parts[2] || "{}") } };
+    case "agents.update":
+      return { method, params: { id: parts[1], ...JSON.parse(parts[2] || "{}") } };
+    case "agents.delete":
+      return { method, params: { id: parts[1] } };
+
+    // --- Config ---
     case "config.get":
       return { method, params: { path: parts[1] || "" } };
+    case "config.set":
+      return { method, params: { path: parts[1], value: JSON.parse(parts[2] || "null") } };
     case "config.patch":
       return { method, params: { path: parts[1], value: JSON.parse(parts[2] || "null") } };
+    case "config.apply":
+      return { method, params: JSON.parse(parts[1] || "{}") };
+    case "config.schema":
+      return { method, params: {} };
+
+    // --- Skills ---
     case "skills.status":
       return { method, params: {} };
+    case "skills.install":
+      return { method, params: { url: parts[1] } };
+    case "skills.update":
+      return { method, params: { id: parts[1] } };
+
+    // --- Cron ---
     case "cron.list":
       return { method, params: {} };
+    case "cron.add":
+      return { method, params: JSON.parse(parts.slice(1).join(" ") || "{}") };
+    case "cron.update":
+      return { method, params: JSON.parse(parts.slice(1).join(" ") || "{}") };
+    case "cron.remove":
+      return { method, params: { id: parts[1] } };
+    case "cron.run":
+      return { method, params: { id: parts[1] } };
+    case "cron.runs":
+      return { method, params: { id: parts[1], limit: parseInt(parts[2]) || 10 } };
+
+    // --- Tools ---
     case "tools.catalog":
       return { method, params: {} };
+
+    // --- Devices ---
+    case "device.pair.list":
+      return { method, params: {} };
+    case "device.pair.approve":
+      return { method, params: { requestId: parts[1], role: "operator", scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"] } };
+    case "device.pair.reject":
+      return { method, params: { requestId: parts[1] } };
+    case "device.pair.remove":
+      return { method, params: { deviceId: parts[1] } };
+    case "device.token.rotate":
+      return { method, params: { deviceId: parts[1] } };
+    case "device.token.revoke":
+      return { method, params: { deviceId: parts[1], role: parts[2] || "operator" } };
+
+    // --- Nodes ---
+    case "node.list":
+      return { method, params: {} };
+    case "node.invoke":
+      return { method, params: { nodeId: parts[1], method: parts[2], args: JSON.parse(parts[3] || "{}") } };
+    case "node.describe":
+      return { method, params: { nodeId: parts[1] } };
+    case "node.rename":
+      return { method, params: { nodeId: parts[1], name: parts[2] } };
+
+    // --- Exec Approvals ---
+    case "exec.approvals.get":
+      return { method, params: {} };
+    case "exec.approval.resolve":
+      return { method, params: { requestId: parts[1], approved: parts[2] !== "deny" } };
+
+    // --- Logs ---
+    case "logs.tail":
+      return { method, params: { lines: parseInt(parts[1]) || 50 } };
+
+    // --- System ---
+    case "gateway.reload":
+      return { method, params: {} };
+    case "update.run":
+      return { method, params: {} };
+
+    // --- TTS ---
+    case "tts.status":
+      return { method, params: {} };
+    case "tts.providers":
+      return { method, params: {} };
+
+    // --- Wizard ---
+    case "wizard.status":
+      return { method, params: {} };
+    case "wizard.start":
+      return { method, params: { channel: parts[1] } };
+
     default:
       // Generic: treat remaining args as JSON params
       try {
@@ -233,9 +343,20 @@ async function afterAuth(ws) {
       const parts = line.trim().split(/\s+/);
       if (!parts[0] || parts[0] === "exit" || parts[0] === "quit") { ws.close(); process.exit(0); }
       if (parts[0] === "help") {
-        console.error("Commands: chat.send <msg>, chat.history [n], sessions.list, channels.status,");
-        console.error("          agents.list, config.get [path], skills.status, cron.list, tools.catalog,");
-        console.error("          <any.method> [json_params], exit");
+        console.error("Chat:     chat.send <msg>, chat.send <sessionKey> <msg>, chat.history [n], chat.abort, chat.inject <key> <role> <text>");
+        console.error("Sessions: sessions.list, sessions.preview [id], sessions.delete <key>, sessions.reset <key>, sessions.compact <key>, sessions.usage");
+        console.error("Channels: channels.status, channels.logout <ch>");
+        console.error("Agents:   agents.list, agents.create <id> [json], agents.update <id> [json], agents.delete <id>");
+        console.error("Config:   config.get [path], config.set <path> <json>, config.patch <path> <json>, config.schema");
+        console.error("Cron:     cron.list, cron.add <json>, cron.remove <id>, cron.run <id>, cron.runs <id> [n]");
+        console.error("Devices:  device.pair.list, device.pair.approve <reqId>, device.pair.reject <reqId>, device.pair.remove <devId>");
+        console.error("Nodes:    node.list, node.describe <id>, node.invoke <id> <method> [json], node.rename <id> <name>");
+        console.error("Skills:   skills.status, skills.install <url>, skills.update <id>");
+        console.error("Tools:    tools.catalog");
+        console.error("Logs:     logs.tail [n]");
+        console.error("System:   gateway.reload, update.run, tts.status, wizard.status");
+        console.error("Generic:  <any.method> [json_params]");
+        console.error("          exit / quit");
         rl.prompt(); return;
       }
       const cmd = parseCommand(parts);
