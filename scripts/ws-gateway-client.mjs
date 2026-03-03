@@ -219,6 +219,12 @@ function parseCommand(parts) {
   }
 }
 
+// --- Streaming support ---
+
+const STREAMING_METHODS = new Set(["chat.send", "chat.inject"]);
+let waitingForCompletion = false;
+let completionResolve = null;
+
 // --- Connection ---
 
 function connect() {
@@ -282,13 +288,38 @@ function connect() {
 
     // --- Events ---
     if (msg.type === "event") {
-      if (flagQuiet && (msg.event === "tick" || msg.event === "health")) return;
-      if (!flagQuiet) console.error("[event]", msg.event);
+      if (msg.event === "tick" || msg.event === "health") return;
+
+      // Agent stream: assistant text chunks
+      if (msg.event === "agent" && msg.payload?.stream === "assistant") {
+        process.stdout.write(msg.payload.data?.delta || msg.payload.data?.text || "");
+        return;
+      }
+      // Agent lifecycle
+      if (msg.event === "agent" && msg.payload?.stream === "lifecycle") {
+        if (msg.payload?.data?.phase === "end") {
+          process.stdout.write("\n");
+          if (completionResolve) { completionResolve(); completionResolve = null; }
+        }
+        return;
+      }
+      // Chat state events (suppress delta since agent stream handles text)
+      if (msg.event === "chat") {
+        if (msg.payload?.state === "final" && completionResolve) {
+          completionResolve(); completionResolve = null;
+        }
+        return;
+      }
+      // Legacy events
       if (msg.event === "chat.completion.chunk") {
         process.stdout.write(msg.payload?.text || msg.payload?.delta || "");
-      } else if (msg.event === "chat.completion") {
-        if (!flagQuiet) console.error("[done]");
+        return;
       }
+      if (msg.event === "chat.completion" || msg.event === "response.completed" || msg.event === "response.failed") {
+        if (completionResolve) { completionResolve(); completionResolve = null; }
+        return;
+      }
+      if (!flagQuiet) console.error("[event]", msg.event);
     }
   });
 
@@ -310,9 +341,20 @@ async function afterAuth(ws) {
   if (positional.length > 0) {
     const cmd = parseCommand(positional);
     if (cmd) {
+      const isStreaming = STREAMING_METHODS.has(cmd.method);
       try {
-        const result = await rpc(ws, cmd.method, cmd.params);
-        console.log(JSON.stringify(result, null, 2));
+        if (isStreaming) {
+          const completionPromise = new Promise((resolve) => {
+            completionResolve = resolve;
+            setTimeout(resolve, 60000); // 60s timeout for streaming
+          });
+          const result = await rpc(ws, cmd.method, cmd.params);
+          if (!flagQuiet) console.error("[started] runId=" + (result.runId || ""));
+          await completionPromise;
+        } else {
+          const result = await rpc(ws, cmd.method, cmd.params);
+          console.log(JSON.stringify(result, null, 2));
+        }
       } catch (e) {
         console.error("[ERROR]", e.message);
       }
