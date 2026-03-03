@@ -66,3 +66,7 @@ force-ipv4.cjs
 healthcheck.sh
 certs/
 tool-wrapper-proxy.js.v*
+
+# Local backups and vendor
+config.backup-*/
+vendor/
