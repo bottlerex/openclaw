@@ -41,7 +41,7 @@ let channels = {};
 let sessions = [];
 let nodes = [];
 let connId = "";
-let connectedAt = null;
+let _connectedAt = null;
 let eventCount = 0;
 let lastEvent = "";
 let chatActive = false;
@@ -183,8 +183,8 @@ function connect() {
       if (!authenticated && msg.ok) {
         authenticated = true;
         connId = msg.payload?.server?.connId || "";
-        connectedAt = Date.now();
-        refresh(ws);
+        _connectedAt = Date.now();
+        void refresh(ws);
         return;
       }
       if (!authenticated && !msg.ok) {
@@ -271,7 +271,7 @@ function handleEvent(msg, ws) {
 
   // Health — do a full refresh instead of partial update
   if (evt === "health") {
-    refresh(ws);
+    void refresh(ws);
     return;
   }
 
@@ -285,7 +285,7 @@ function handleEvent(msg, ws) {
 
   // Tick — periodic refresh
   if (evt === "tick") {
-    refresh(ws);
+    void refresh(ws);
     return;
   }
 

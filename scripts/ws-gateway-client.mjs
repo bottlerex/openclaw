@@ -222,7 +222,7 @@ function parseCommand(parts) {
 // --- Streaming support ---
 
 const STREAMING_METHODS = new Set(["chat.send", "chat.inject"]);
-let waitingForCompletion = false;
+let _waitingForCompletion = false;
 let completionResolve = null;
 
 // --- Connection ---
@@ -269,7 +269,7 @@ function connect() {
         authenticated = true;
         if (!flagQuiet) console.error("[OK] connected " + (msg.payload?.server?.connId || ""));
         if (flagOnce) { ws.close(); process.exit(0); }
-        afterAuth(ws);
+        void afterAuth(ws);
         return;
       }
       if (!authenticated && !msg.ok) {
@@ -324,7 +324,7 @@ function connect() {
   });
 
   ws.on("error", (e) => console.error("[ERR]", e.message));
-  ws.on("close", (code) => {
+  ws.on("close", (_code) => {
     if (!flagOnce && authenticated) {
       console.error("[RECONNECT] in 3s...");
       setTimeout(connect, 3000);
