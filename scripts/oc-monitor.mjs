@@ -269,15 +269,9 @@ function handleEvent(msg, ws) {
   // Chat events
   if (evt === "chat") return; // handled via agent events
 
-  // Health — refresh data
+  // Health — do a full refresh instead of partial update
   if (evt === "health") {
-    if (p.channels) {
-      // Quick update from health payload
-      for (const [chId, ch] of Object.entries(p.channels)) {
-        channels[chId] = { ...channels[chId], ...ch };
-      }
-      renderDashboard();
-    }
+    refresh(ws);
     return;
   }
 
