@@ -12,7 +12,7 @@
  *   node ws-gateway-client.mjs sessions.list            # list sessions
  *   node ws-gateway-client.mjs chat.history              # get chat history
  *   node ws-gateway-client.mjs channels.status           # channel status
- *   node ws-gateway-client.mjs config.get gateway        # get config
+ *   node ws-gateway-client.mjs config.get               # get full config
  *   echo '{"method":"chat.send","params":{"text":"hi"}}' | node ws-gateway-client.mjs --stdin
  *
  * Environment:
@@ -76,7 +76,7 @@ function parseCommand(parts) {
   switch (method) {
     // --- Chat ---
     case "chat.send":
-      return { method, params: { sessionKey: parts[2] ? parts[1] : "agent:main:main", message: parts[2] || parts.slice(1).join(" ") || "ping", idempotencyKey: crypto.randomUUID() } };
+      return { method, params: { sessionKey: parts[2] ? parts[1] : "agent:main:main", message: parts[2] ? parts.slice(2).join(" ") : parts.slice(1).join(" ") || "ping", idempotencyKey: crypto.randomUUID() } };
     case "chat.history":
       return { method, params: { limit: parseInt(parts[1]) || 20 } };
     case "chat.abort":
@@ -222,7 +222,6 @@ function parseCommand(parts) {
 // --- Streaming support ---
 
 const STREAMING_METHODS = new Set(["chat.send", "chat.inject"]);
-let _waitingForCompletion = false;
 let completionResolve = null;
 
 // --- Connection ---
@@ -232,7 +231,8 @@ function connect() {
   let authenticated = false;
 
   ws.on("message", (data) => {
-    const msg = JSON.parse(data);
+    let msg;
+    try { msg = JSON.parse(data); } catch { if (!flagQuiet) console.error("[WARN] malformed JSON frame"); return; }
 
     // --- Auth handshake ---
     if (msg.event === "connect.challenge") {
@@ -389,7 +389,7 @@ async function afterAuth(ws) {
         console.error("Sessions: sessions.list, sessions.preview [id], sessions.delete <key>, sessions.reset <key>, sessions.compact <key>, sessions.usage");
         console.error("Channels: channels.status, channels.logout <ch>");
         console.error("Agents:   agents.list, agents.create <id> [json], agents.update <id> [json], agents.delete <id>");
-        console.error("Config:   config.get [path], config.set <path> <json>, config.patch <path> <json>, config.schema");
+        console.error("Config:   config.get, config.set <path> <json>, config.patch <path> <json>, config.schema");
         console.error("Cron:     cron.list, cron.add <json>, cron.remove <id>, cron.run <id>, cron.runs <id> [n]");
         console.error("Devices:  device.pair.list, device.pair.approve <reqId>, device.pair.reject <reqId>, device.pair.remove <devId>");
         console.error("Nodes:    node.list, node.describe <id>, node.invoke <id> <method> [json], node.rename <id> <name>");
