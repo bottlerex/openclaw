@@ -97,9 +97,15 @@ function parseCommand(parts) {
         },
       };
     case "chat.history":
-      return { method, params: { limit: parseInt(parts[1]) || 20 } };
+      return {
+        method,
+        params: {
+          sessionKey: parts[2] ? parts[1] : "agent:main:main",
+          limit: parseInt(parts[2] || parts[1]) || 20,
+        },
+      };
     case "chat.abort":
-      return { method, params: {} };
+      return { method, params: { sessionKey: parts[1] || "agent:main:main" } };
     case "chat.inject":
       return {
         method,
@@ -114,7 +120,7 @@ function parseCommand(parts) {
     case "sessions.list":
       return { method, params: {} };
     case "sessions.preview":
-      return { method, params: { sessionId: parts[1] || "main" } };
+      return { method, params: { keys: [parts[1] || "agent:main:main"] } };
     case "sessions.delete":
       return { method, params: { key: parts[1] } };
     case "sessions.reset":
@@ -143,17 +149,17 @@ function parseCommand(parts) {
         params: { name: parts[1], workspace: parts[1], ...JSON.parse(parts[2] || "{}") },
       };
     case "agents.update":
-      return { method, params: { id: parts[1], ...JSON.parse(parts[2] || "{}") } };
+      return { method, params: { agentId: parts[1], ...JSON.parse(parts[2] || "{}") } };
     case "agents.delete":
-      return { method, params: { id: parts[1] } };
+      return { method, params: { agentId: parts[1] } };
 
     // --- Config ---
     case "config.get":
       return { method, params: {} };
     case "config.set":
-      return { method, params: { path: parts[1], value: JSON.parse(parts[2] || "null") } };
+      return { method, params: { raw: parts.slice(1).join(" ") } };
     case "config.patch":
-      return { method, params: { path: parts[1], value: JSON.parse(parts[2] || "null") } };
+      return { method, params: { raw: parts.slice(1).join(" ") } };
     case "config.apply":
       return { method, params: JSON.parse(parts[1] || "{}") };
     case "config.schema":
@@ -503,18 +509,16 @@ async function afterAuth(ws) {
       }
       if (parts[0] === "help") {
         console.error(
-          "Chat:     chat.send <msg>, chat.send <sessionKey> <msg>, chat.history [n], chat.abort, chat.inject <key> <role> <text>",
+          "Chat:     chat.send <msg>, chat.send <key> <msg>, chat.history [key] [n], chat.abort [key], chat.inject <key> <role> <text>",
         );
         console.error(
-          "Sessions: sessions.list, sessions.preview [id], sessions.delete <key>, sessions.reset <key>, sessions.compact <key>, sessions.usage",
+          "Sessions: sessions.list, sessions.preview [key], sessions.delete <key>, sessions.reset <key>, sessions.compact <key>, sessions.usage",
         );
         console.error("Channels: channels.status, channels.logout <ch>");
         console.error(
           "Agents:   agents.list, agents.create <id> [json], agents.update <id> [json], agents.delete <id>",
         );
-        console.error(
-          "Config:   config.get, config.set <path> <json>, config.patch <path> <json>, config.schema",
-        );
+        console.error("Config:   config.get, config.set <raw>, config.patch <raw>, config.schema");
         console.error(
           "Cron:     cron.list, cron.add <json>, cron.remove <id>, cron.run <id>, cron.runs <id> [n]",
         );
