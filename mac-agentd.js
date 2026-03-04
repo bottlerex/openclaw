@@ -78,6 +78,66 @@ function isAllowedContainer(name) {
   return ALLOWED_CONTAINERS.has(name);
 }
 
+// ─── Session ID Helper ───────────────────────────────────────────
+function extractSessionId(req) {
+  const auth = req.headers['authorization'] || '';
+  const match = auth.match(/^Bearer\s+(.+)$/);
+  if (!match) return 'unknown';
+  return crypto.createHash('sha256').update(match[1]).digest('hex').slice(0, 8);
+}
+
+// ─── Runaway Guard (Bounded Autonomy Phase 2) ──────────────────
+// Prevents malformed agents from executing > 10 operational/destructive ops per 60s
+class RunawayGuard {
+  constructor({ windowMs = 60000, limit = 10, cooldownMs = 30000 } = {}) {
+    this.windowMs = windowMs;
+    this.limit = limit;
+    this.cooldownMs = cooldownMs;
+    this.sessions = new Map(); // sessionId → { count, destructiveCount, lastPausedAt }
+  }
+
+  check(sessionId, autonomyClass) {
+    const now = Date.now();
+    if (!this.sessions.has(sessionId)) {
+      this.sessions.set(sessionId, { count: 0, destructiveCount: 0, windowStart: now, lastPausedAt: null });
+    }
+    const session = this.sessions.get(sessionId);
+
+    // Check cooldown
+    if (session.lastPausedAt && now - session.lastPausedAt < this.cooldownMs) {
+      return { allowed: false, reason: 'paused (cooldown)', blockDurationMs: this.cooldownMs - (now - session.lastPausedAt) };
+    }
+
+    // Reset window if expired
+    if (now - session.windowStart > this.windowMs) {
+      session.count = 0;
+      session.destructiveCount = 0;
+      session.windowStart = now;
+      session.lastPausedAt = null;
+    }
+
+    // Weight: operational=1, destructive=3
+    const weight = autonomyClass === 'destructive' ? 3 : 1;
+    const wouldBe = session.count + weight;
+
+    if (wouldBe > this.limit) {
+      session.lastPausedAt = now;
+      return { allowed: false, reason: 'runaway detected', blockDurationMs: this.cooldownMs, count: session.count };
+    }
+
+    session.count += weight;
+    if (autonomyClass === 'destructive') session.destructiveCount += 1;
+
+    return { allowed: true, count: session.count, destructiveCount: session.destructiveCount };
+  }
+
+  reset(sessionId) {
+    this.sessions.delete(sessionId);
+  }
+}
+
+const runawayGuard = new RunawayGuard();
+
 // Strict schema validation — reject extra fields + type check
 function validateSchema(body, schema) {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -534,6 +594,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   const jobId = createJobId();
+  const sessionId = extractSessionId(req);
   let body = {};
 
   try {
@@ -541,30 +602,42 @@ const server = http.createServer(async (req, res) => {
       body = await parseBody(req);
     }
 
-    // Determine risk level
-    const risk = url.includes('/docker/restart') ? 'destructive'
-      : url.includes('/fs/write') || url.includes('/git/commit') || url.includes('/git/add') ? 'write'
-      : url.includes('/project/test') ? 'exec'
-      : 'read';
+    // Determine autonomy class (Phase 2: safe / operational / destructive)
+    const autonomyClass =
+      url.match(/^(\/health|\/audit-log|\/fs\/read|\/git\/log|\/git\/status|\/git\/diff|\/docker\/ps|\/system\/info)/) ? 'safe'
+      : url.match(/^(\/docker\/restart|\/git\/force-push|\/fs\/delete)/) ? 'destructive'
+      : 'operational'; // write/exec/commit/test, etc.
 
-    // Execute through serial queue for write/destructive/exec ops
+    // Runaway guard check for operational/destructive
+    if (autonomyClass !== 'safe') {
+      const guardResult = runawayGuard.check(sessionId, autonomyClass);
+      if (!guardResult.allowed) {
+        const elapsed = Date.now() - startTime;
+        auditLog({ job_id: jobId, session_id: sessionId, capability: url, autonomy_class: autonomyClass, runaway_blocked: true, reason: guardResult.reason, count: guardResult.count, elapsed_ms: elapsed });
+        console.warn(`[agentd] runaway blocked: ${sessionId} (${guardResult.reason})`);
+        sendJSON(res, 429, { error: `runaway guard: ${guardResult.reason}`, retry_after_ms: guardResult.blockDurationMs });
+        return;
+      }
+    }
+
+    // Execute through serial queue for operational/destructive ops
     let result;
-    if (risk === 'read') {
+    if (autonomyClass === 'safe') {
       result = await handler(body, req.url);
     } else {
       result = await enqueue(() => handler(body, req.url));
     }
 
     const elapsed = Date.now() - startTime;
-    auditLog({ job_id: jobId, capability: url, risk, params: body, elapsed_ms: elapsed, success: true });
-    console.log(`[agentd] ${routeKey} → 200 (${elapsed}ms) [${jobId}]`);
+    auditLog({ job_id: jobId, session_id: sessionId, capability: url, autonomy_class: autonomyClass, runaway_count: runawayGuard.sessions.get(sessionId)?.count || 0, elapsed_ms: elapsed, success: true });
+    console.log(`[agentd] ${routeKey} → 200 (${elapsed}ms) [${jobId}] [session: ${sessionId}]`);
     sendJSON(res, 200, { job_id: jobId, ...result });
 
   } catch (e) {
     const elapsed = Date.now() - startTime;
     const status = e.status || 500;
     const message = e.message || 'internal error';
-    auditLog({ job_id: jobId, capability: url, params: body, elapsed_ms: elapsed, success: false, error: message });
+    auditLog({ job_id: jobId, session_id: sessionId, capability: url, params: body, elapsed_ms: elapsed, success: false, error: message });
     console.error(`[agentd] ${routeKey} → ${status} (${elapsed}ms) [${jobId}]: ${message}`);
     sendJSON(res, status, { error: message });
   }
