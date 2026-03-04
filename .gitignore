@@ -11,6 +11,7 @@ exec-approvals.json
 
 # Backups
 *.bak
+*.bak.*
 *.backup
 .backups/
 .backup-*/
