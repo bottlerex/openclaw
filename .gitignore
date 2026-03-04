@@ -71,3 +71,4 @@ tool-wrapper-proxy.js.v*
 # Local backups and vendor
 config.backup-*/
 vendor/
+data/rag-index.sqlite
