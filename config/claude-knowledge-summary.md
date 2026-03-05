@@ -1,7 +1,7 @@
 # Claude Knowledge Summary (Auto-generated)
 
 > **source**: claude
-> **synced_at**: 2026-03-04T10:00:01Z
+> **synced_at**: 2026-03-05T01:00:00Z
 > **authority**: read-only
 > **warning**: This file is auto-generated. Do NOT edit manually.
 
@@ -9,21 +9,20 @@
 
 ## Project Status
 
-## 🔴 系統狀態
+## 系統狀態
 | 系統 | 狀態 | 啟動日期 |
 |------|------|---------|
-| **L1-L3 自學系統** | ✅ 就位 | 2026-02-28 |
-| **雙機三層同步** | ✅ 正常 | 2026-02-20 |
-| **Governance Phase 1-2** | ✅ 完成 | 2026-02-20 |
-| **Cognitive Architecture v4.1** | ✅ 部署 | 2026-03-01 |
-| **v4.1 觀察期** | 進行中 | 2026-03-01 ~ 03-05 |
-| **通用專案狀態追蹤** | ✅ 就位 | 2026-03-01 |
-| **Enforcement Kernel v1.2** | ✅ 部署 | 2026-03-02 |
+| **L1-L3 自學系統** | 就位 | 2026-02-28 |
+| **雙機三層同步** | 正常 | 2026-02-20 |
+| **Governance Phase 1-2** | 完成 | 2026-02-20 |
+| **Cognitive Architecture v4.1** | 部署 | 2026-03-01 |
+| **Enforcement Kernel v1.2** | 部署 | 2026-03-02 |
+| **專案狀態追蹤** | 就位 | 2026-03-01 |
 
 ## Active Work (Current Status)
 
 - **狀態**: 生產就緒 ✅ (機構投資人數據恢復完成)
-- **狀態**: ✅ 授權問題已解決，Claude agent 可以自動執行 SSH 命令
+- **狀態**: ✅ Bounded Autonomy v1 觀察期完成，進入 Phase 2 準備 (2026-03-04)
 - **狀態**: 聊天 API 完全實現並生產部署
 - **狀態**: 活躍
 - **狀態**: 待啟動，無進行中工作
@@ -40,34 +39,11 @@
 
 ### Circuit Breaker Triggers
 
-觸發條件（ANY）:
-  1. 原始假設被推翻（發現方案前提不成立）
-  2. 遭遇未預期的系統邊界（API 限制、權限不足、相容性問題）
-  3. workaround 次數 > 2（累計繞過 2 次 = 方案有根本問題）
-  4. 投機性編碼（不確定能不能跑，先寫再說）
-  5. 任務意圖漂移（做著做著偏離原始目標）
-  6. Progress stagnation: ≥3 次連續修改未實質推進目標
-     （retry/rename/tweak config/調 log = pseudo-progress，不算推進）
-```
-
 
 ### Intent Anchor
 
-TASK_SUCCESS_CRITERIA: [具體、可驗證的完成定義]
-SUCCESS_CONSTRAINTS: [優化過程中不可違反的條件]
-```
-
 
 ### Completion Checklist
-
-Completion Checklist:
-  □ 引入了不必要的複雜度？
-  □ 增加了未來維護成本？
-  □ 產生了隱性耦合？（A 改了，B 會壞但不明顯）
-  □ 決策是否可逆？（不可逆的要特別確認）
-  □ 是否增加了系統熵？（special case、分支邏輯、例外處理的淨增量）
-  □ 是否實際降低了系統不確定性？（不是「做了什麼」而是「改變了什麼」）
-```
 
 
 ## Infrastructure
