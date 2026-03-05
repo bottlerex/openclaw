@@ -1,0 +1,40 @@
+{
+  "additions": [
+    {
+      "id": "tool-timeout",
+      "pattern": "/usr/bin/timeout",
+      "description": "timeout command for limiting execution time"
+    },
+    {
+      "id": "tool-openclaw-shell",
+      "pattern": "/usr/local/bin/openclaw-shell.sh",
+      "description": "OpenClaw shell wrapper script"
+    },
+    {
+      "id": "tool-which",
+      "pattern": "/usr/bin/which",
+      "description": "Find command in PATH"
+    },
+    {
+      "id": "tool-head",
+      "pattern": "/usr/bin/head",
+      "description": "Show first lines of files"
+    },
+    {
+      "id": "tool-tail",
+      "pattern": "/usr/bin/tail",
+      "description": "Show last lines of files"
+    },
+    {
+      "id": "tool-wc",
+      "pattern": "/usr/bin/wc",
+      "description": "Count words/lines/chars"
+    },
+    {
+      "id": "tool-sort",
+      "pattern": "/usr/bin/sort",
+      "description": "Sort file lines"
+    }
+  ],
+  "instructions": "手動添加這些行到 config/exec-approvals.json 的 allowlist 陣列中"
+}
