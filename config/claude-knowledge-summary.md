@@ -1,7 +1,7 @@
 # Claude Knowledge Summary (Auto-generated)
 
 > **source**: claude
-> **synced_at**: 2026-03-05T04:00:00Z
+> **synced_at**: 2026-03-05T10:00:01Z
 > **authority**: read-only
 > **warning**: This file is auto-generated. Do NOT edit manually.
 
@@ -9,15 +9,15 @@
 
 ## Project Status
 
-## 系統狀態
-| 系統 | 狀態 | 啟動日期 |
-|------|------|---------|
-| **L1-L3 自學系統** | 就位 | 2026-02-28 |
-| **雙機三層同步** | 正常 | 2026-02-20 |
-| **Governance Phase 1-2** | 完成 | 2026-02-20 |
-| **Cognitive Architecture v4.1** | 部署 | 2026-03-01 |
-| **Enforcement Kernel v1.2** | 部署 | 2026-03-02 |
-| **專案狀態追蹤** | 就位 | 2026-03-01 |
+## 系統狀態 (2026-03-05)
+| 系統 | 狀態 | 更新日期 |
+|------|------|--------|
+| Taiwan Stock MVP | ✅ 完全運作 | 2026-03-05 |
+| PM Skills 整合 (pm-finance) | ✅ Phase 3 進行中 | 2026-03-05 |
+| OpenClaw P0 Recovery | ✅ 生產就緒 | 2026-03-05 |
+| Alert Escalation System v2 | ✅ 生產就緒 | 2026-03-05 |
+| 雙機三層同步 | ✅ 正常 | 2026-02-20 |
+| Enforcement Kernel v1.2 | ✅ 部署 | 2026-03-02 |
 
 ## Active Work (Current Status)
 
@@ -50,8 +50,8 @@
 
 | 機器 | 用戶 | IP | 核心服務 |
 |------|------|----|----|
-| **MacBook** | rexsu | 100.118.50.10 | SSH, .claude |
-| **Mac mini** | rexmacmini | 100.76.67.49 | Ollama, PostgreSQL, Redis |
+| **MacBook** | rexsu | 100.118.50.10 | SSH, .claude, 備份 |
+| **Mac mini** | rexmacmini | 100.76.67.49 | Ollama, PostgreSQL, Redis, OpenClaw |
 
 ---
 
