@@ -2888,7 +2888,7 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(LISTEN_PORT, '0.0.0.0', () => {
+server.listen(LISTEN_PORT, '127.0.0.1', () => {
   console.log(`[wrapper] Tool wrapper proxy v${VERSION} listening on :${LISTEN_PORT}`);
   console.log(`[wrapper] Upstream: localhost:${UPSTREAM_PORT}`);
   console.log(`[wrapper] Skill API: localhost:${SKILL_API_PORT}`);
