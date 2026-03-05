@@ -30,6 +30,7 @@ services:
       - OPENCLAW_PRIMARY_MODEL=cliproxy/claude-haiku-4-5-20251001
       - BRAVE_API_KEY=${BRAVE_API_KEY}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_GOAL_ALERTS_BOT_TOKEN=${TELEGRAM_GOAL_ALERTS_BOT_TOKEN}
       - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --dns-result-order=ipv4first
       # P0 Resilience Hardening (2026-03-05)
       - OPENCLAW_HEALTH_CHECK_INTERVAL=30s
