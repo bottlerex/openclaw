@@ -1,0 +1,288 @@
+{
+  "version": 1,
+  "socket": {
+    "path": "/home/node/.openclaw/exec-approvals.sock",
+    "token": "McBDMusI3_tNjA4VzBjVx8msZxSDw99A"
+  },
+  "defaults": {
+    "security": "allowlist",
+    "ask": "off",
+    "askFallback": "allowlist",
+    "autoAllowSkills": true
+  },
+  "agents": {
+    "main": {
+      "security": "allowlist",
+      "ask": "off",
+      "askFallback": "allowlist",
+      "autoAllowSkills": true,
+      "allowlist": [
+        {
+          "id": "safe-bash",
+          "pattern": "/usr/bin/bash",
+          "lastUsedAt": 1772681406429,
+          "lastUsedCommand": "bash /home/node/.openclaw/scripts/host-exec.sh \"python3 /Users/rexmacmini/Projects/cc-automation/main.py\"",
+          "lastResolvedPath": "/usr/bin/bash"
+        },
+        {
+          "id": "safe-sh",
+          "pattern": "/usr/bin/sh"
+        },
+        {
+          "id": "safe-cat",
+          "pattern": "/bin/cat"
+        },
+        {
+          "id": "safe-ls",
+          "pattern": "/bin/ls"
+        },
+        {
+          "id": "safe-find",
+          "pattern": "/usr/bin/find",
+          "lastUsedAt": 1772698305287,
+          "lastUsedCommand": "find /home/node/projects/memory -name \"2026-03-05*\" -type f",
+          "lastResolvedPath": "/usr/bin/find"
+        },
+        {
+          "id": "safe-grep",
+          "pattern": "/usr/bin/grep",
+          "lastUsedAt": 1772683840278,
+          "lastUsedCommand": "ls -lh /home/node/projects/*.md | grep -i \"webhook\\|clawfeed\\|claw\"",
+          "lastResolvedPath": "/usr/bin/ls"
+        },
+        {
+          "id": "safe-git",
+          "pattern": "/usr/bin/git"
+        },
+        {
+          "id": "safe-node",
+          "pattern": "/opt/homebrew/bin/node"
+        },
+        {
+          "id": "safe-npm",
+          "pattern": "/opt/homebrew/bin/npm"
+        },
+        {
+          "id": "safe-npx",
+          "pattern": "/opt/homebrew/bin/npx"
+        },
+        {
+          "id": "safe-python",
+          "pattern": "/opt/homebrew/bin/python3"
+        },
+        {
+          "id": "safe-echo",
+          "pattern": "/bin/echo"
+        },
+        {
+          "id": "safe-date",
+          "pattern": "/bin/date"
+        },
+        {
+          "id": "safe-uptime",
+          "pattern": "/usr/bin/uptime"
+        },
+        {
+          "id": "safe-hostname",
+          "pattern": "/bin/hostname"
+        },
+        {
+          "id": "safe-whoami",
+          "pattern": "/usr/bin/whoami"
+        },
+        {
+          "id": "safe-uname",
+          "pattern": "/usr/bin/uname"
+        },
+        {
+          "id": "safe-ssh",
+          "pattern": "/usr/bin/ssh",
+          "lastUsedAt": 1772701901688,
+          "lastUsedCommand": "ssh openclaw@host.docker.internal 'git -C ~/projects/taiwan-stock-mvp log --oneline -3 2>/dev/null || echo \"git 檢查失敗\"'",
+          "lastResolvedPath": "/usr/bin/ssh"
+        },
+        {
+          "id": "safe-curl",
+          "pattern": "/usr/bin/curl"
+        },
+        {
+          "id": "safe-docker",
+          "pattern": "/opt/homebrew/bin/docker"
+        },
+        {
+          "id": "safe-df",
+          "pattern": "/bin/df"
+        },
+        {
+          "id": "safe-ps",
+          "pattern": "/bin/ps"
+        },
+        {
+          "id": "safe-wc",
+          "pattern": "/usr/bin/wc",
+          "lastUsedAt": 1772694706168,
+          "lastUsedCommand": "find /home/node/projects -maxdepth 1 -name \"IDENTITY.md\" -o -name \"USER.md\" -o -name \"SOUL.md\" | wc -l",
+          "lastResolvedPath": "/usr/bin/find"
+        },
+        {
+          "id": "safe-sort",
+          "pattern": "/usr/bin/sort",
+          "lastUsedAt": 1772681061343,
+          "lastUsedCommand": "find /home/node/projects -maxdepth 1 -type f -name \"*OPTIMIZATION-DAY*\" -o -name \"*IMPLEMENTATION*\" | sort",
+          "lastResolvedPath": "/usr/bin/find"
+        },
+        {
+          "id": "safe-head",
+          "pattern": "/usr/bin/head",
+          "lastUsedAt": 1772694703077,
+          "lastUsedCommand": "head -30 /home/node/projects/TODO.md",
+          "lastResolvedPath": "/usr/bin/head"
+        },
+        {
+          "id": "safe-tail",
+          "pattern": "/usr/bin/tail",
+          "lastUsedAt": 1772685025986,
+          "lastUsedCommand": "ls -lh /home/node/projects/memory/*.md | tail -20",
+          "lastResolvedPath": "/usr/bin/ls"
+        },
+        {
+          "id": "safe-mkdir",
+          "pattern": "/bin/mkdir"
+        },
+        {
+          "id": "safe-cp",
+          "pattern": "/bin/cp"
+        },
+        {
+          "id": "safe-mv",
+          "pattern": "/bin/mv"
+        },
+        {
+          "id": "safe-pwd",
+          "pattern": "/bin/pwd"
+        },
+        {
+          "id": "safe-diff",
+          "pattern": "/usr/bin/diff"
+        },
+        {
+          "id": "safe-rm",
+          "pattern": "/bin/rm"
+        },
+        {
+          "id": "safe-touch",
+          "pattern": "/usr/bin/touch"
+        },
+        {
+          "id": "safe-homebrew-all",
+          "pattern": "/opt/homebrew/bin/*"
+        },
+        {
+          "id": "e4921acf-a9f1-4ab3-84b8-45506e9916d8",
+          "pattern": "/usr/bin/ls",
+          "lastUsedAt": 1772685025986,
+          "lastUsedCommand": "ls -lh /home/node/projects/memory/*.md | tail -20",
+          "lastResolvedPath": "/usr/bin/ls"
+        },
+        {
+          "id": "safe-openclaw",
+          "pattern": "/usr/local/bin/openclaw",
+          "lastUsedAt": 1772719114511,
+          "lastUsedCommand": "openclaw doctor",
+          "lastResolvedPath": "/usr/local/bin/openclaw"
+        },
+        {
+          "id": "safe-gog",
+          "pattern": "/opt/homebrew/bin/gog"
+        },
+        {
+          "id": "safe-node-local",
+          "pattern": "/usr/local/bin/node"
+        },
+        {
+          "id": "safe-npm-local",
+          "pattern": "/usr/local/bin/npm"
+        },
+        {
+          "id": "safe-npx-local",
+          "pattern": "/usr/local/bin/npx"
+        }
+      ]
+    },
+    "code-review": {
+      "security": "deny",
+      "ask": "off"
+    },
+    "monitor": {
+      "security": "allowlist",
+      "ask": "off",
+      "askFallback": "allowlist",
+      "allowlist": [
+        {
+          "id": "mon-bash",
+          "pattern": "/usr/bin/bash",
+          "lastUsedAt": 1772713803797,
+          "lastUsedCommand": "bash /home/node/.openclaw/scripts/host-exec.sh \"uptime && echo '---' && df -h / /Users 2>/dev/null && echo '---' && docker ps --format 'table {{.Names}}\\t{{.Status}}'\"",
+          "lastResolvedPath": "/usr/bin/bash"
+        },
+        {
+          "id": "mon-ssh",
+          "pattern": "/usr/bin/ssh"
+        },
+        {
+          "id": "mon-cat",
+          "pattern": "/usr/bin/cat"
+        },
+        {
+          "id": "mon-ls",
+          "pattern": "/usr/bin/ls"
+        },
+        {
+          "id": "mon-head",
+          "pattern": "/usr/bin/head"
+        },
+        {
+          "id": "mon-tail",
+          "pattern": "/usr/bin/tail",
+          "lastUsedAt": 1772692204427,
+          "lastUsedCommand": "df -h / | tail -1",
+          "lastResolvedPath": "/usr/bin/df"
+        },
+        {
+          "id": "mon-wc",
+          "pattern": "/usr/bin/wc"
+        },
+        {
+          "id": "mon-grep",
+          "pattern": "/usr/bin/grep"
+        },
+        {
+          "id": "mon-df",
+          "pattern": "/usr/bin/df",
+          "lastUsedAt": 1772692204427,
+          "lastUsedCommand": "df -h / | tail -1",
+          "lastResolvedPath": "/usr/bin/df"
+        },
+        {
+          "id": "mon-ps",
+          "pattern": "/usr/bin/ps"
+        },
+        {
+          "id": "mon-uptime",
+          "pattern": "/usr/bin/uptime",
+          "lastUsedAt": 1772692204409,
+          "lastUsedCommand": "uptime",
+          "lastResolvedPath": "/usr/bin/uptime"
+        },
+        {
+          "id": "mon-hostname",
+          "pattern": "/usr/bin/hostname"
+        },
+        {
+          "id": "mon-date",
+          "pattern": "/usr/bin/date"
+        }
+      ]
+    }
+  }
+}
