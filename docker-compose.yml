@@ -7,57 +7,57 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.0"
+          cpus: '2.0'
           memory: 2G
     sysctls:
-      - net.ipv6.conf.all.disable_ipv6=1
-      - net.ipv6.conf.default.disable_ipv6=1
+    - net.ipv6.conf.all.disable_ipv6=1
+    - net.ipv6.conf.default.disable_ipv6=1
     environment:
-      - OPENCLAW_CONSENT_MODE=false
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-      - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
-      - GOG_DEFAULT_ACCOUNT=${GOG_DEFAULT_ACCOUNT}
-      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
-      # Tools configured in openclaw.json (exec/read/write/edit via CLIProxyAPI)
-      - ENABLE_CALENDAR=true
-      - ENABLE_GMAIL=true
-      - ENABLE_DRIVE=true
-      - CALENDAR_CACHE_PATH=/home/node/calendar_cache
-      - SCHEDULE_DAILY_DIGEST=09:00
-      - TIMEZONE=Asia/Taipei
-      - OPENCLAW_PRIMARY_MODEL=cliproxy/claude-haiku-4-5-20251001
-      - BRAVE_API_KEY=${BRAVE_API_KEY}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_GOAL_ALERTS_BOT_TOKEN=${TELEGRAM_GOAL_ALERTS_BOT_TOKEN}
-      - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --dns-result-order=ipv4first
-      # P0 Resilience Hardening (2026-03-05)
-      - OPENCLAW_HEALTH_CHECK_INTERVAL=30s
-      - OPENCLAW_HEALTH_CHECK_TIMEOUT=5s
-      - OPENCLAW_PROVIDER_RESTART_MAX_RETRIES=3
-      - OPENCLAW_TELEGRAM_GETUPDATE_TIMEOUT=5s
-      - OPENCLAW_WEBSOCKET_HEARTBEAT_INTERVAL=30s
-      - OPENCLAW_WEBSOCKET_IDLE_TIMEOUT=60s
-      - OPENCLAW_TOOLS_ALLOWLIST_RELOAD_INTERVAL=3600s
-      - OPENCLAW_LOG_LEVEL=debug
-      - OPENCLAW_CRASH_RESTART_DELAY=10s
+    - OPENCLAW_CONSENT_MODE=false
+    - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+    - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
+    - GOG_DEFAULT_ACCOUNT=${GOG_DEFAULT_ACCOUNT}
+    - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+    - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+    - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+    - ENABLE_CALENDAR=true
+    - ENABLE_GMAIL=true
+    - ENABLE_DRIVE=true
+    - CALENDAR_CACHE_PATH=/home/node/calendar_cache
+    - SCHEDULE_DAILY_DIGEST=09:00
+    - TIMEZONE=Asia/Taipei
+    - OPENCLAW_PRIMARY_MODEL=cliproxy/claude-haiku-4-5-20251001
+    - BRAVE_API_KEY=${BRAVE_API_KEY}
+    - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+    - TELEGRAM_GOAL_ALERTS_BOT_TOKEN=${TELEGRAM_GOAL_ALERTS_BOT_TOKEN}
+    - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --dns-result-order=ipv4first
+    - OPENCLAW_HEALTH_CHECK_INTERVAL=30s
+    - OPENCLAW_HEALTH_CHECK_TIMEOUT=5s
+    - OPENCLAW_PROVIDER_RESTART_MAX_RETRIES=3
+    - OPENCLAW_TELEGRAM_GETUPDATE_TIMEOUT=5s
+    - OPENCLAW_WEBSOCKET_HEARTBEAT_INTERVAL=30s
+    - OPENCLAW_WEBSOCKET_IDLE_TIMEOUT=60s
+    - OPENCLAW_TOOLS_ALLOWLIST_RELOAD_INTERVAL=3600s
+    - OPENCLAW_LOG_LEVEL=debug
+    - OPENCLAW_CRASH_RESTART_DELAY=10s
+    - NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+    - OPENCLAW_NO_RESPAWN=1
     image: ghcr.io/openclaw/openclaw:main
     networks:
-      - openclaw-isolated
+    - openclaw-isolated
     ports:
-      - 0.0.0.0:18789:18789
-      - 0.0.0.0:9091:9090
+    - 0.0.0.0:18789:18789
+    - 0.0.0.0:9091:9090
     restart: unless-stopped
     volumes:
-      - ./config:/home/node/.openclaw
-      - ./workspace:/home/node/workspace
-      - ./calendar_cache:/home/node/calendar_cache
-      - ./gog-cli/gog:/usr/local/bin/gog:ro
-      - ./gog-config:/home/node/.config/gogcli
-      - ./ssh-keys:/home/node/.ssh
-      - /Users/rexmacmini/.claude/projects/-Users-rexmacmini/memory:/home/node/claude-memory:ro
-      - /Users/rexmacmini/.claude/rules:/home/node/claude-rules:ro
-      - /Users/rexmacmini/Project/active_projects:/home/node/projects
+    - ./config:/home/node/.openclaw
+    - ./workspace:/home/node/workspace
+    - ./calendar_cache:/home/node/calendar_cache
+    - ./gog-cli/gog:/usr/local/bin/gog:ro
+    - ./gog-config:/home/node/.config/gogcli
+    - ./ssh-keys:/home/node/.ssh
+    - /Users/rexmacmini/.claude/projects/-Users-rexmacmini/memory:/home/node/claude-memory:ro
+    - /Users/rexmacmini/.claude/rules:/home/node/claude-rules:ro
+    - /Users/rexmacmini/Project/active_projects:/home/node/projects
     extra_hosts:
-      - host.docker.internal:host-gateway
+    - host.docker.internal:host-gateway
