@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "purpose": "P0 Resilience Hardening Configuration",
+    "date": "2026-03-05",
+    "version": "1.0"
+  },
+  "comments": {
+    "note_1": "These settings complement Layer 1 auto-recovery monitoring",
+    "note_2": "Applied via docker-compose environment overrides",
+    "note_3": "Requires docker restart to take effect"
+  },
+  "environment_overrides": {
+    "OPENCLAW_HEALTH_CHECK_INTERVAL": "30s",
+    "OPENCLAW_HEALTH_CHECK_TIMEOUT": "5s",
+    "OPENCLAW_PROVIDER_RESTART_MAX_RETRIES": "3",
+    "OPENCLAW_TELEGRAM_GETUPDATE_TIMEOUT": "5s",
+    "OPENCLAW_WEBSOCKET_HEARTBEAT_INTERVAL": "30s",
+    "OPENCLAW_WEBSOCKET_IDLE_TIMEOUT": "60s",
+    "OPENCLAW_TOOLS_ALLOWLIST_RELOAD_INTERVAL": "3600s",
+    "OPENCLAW_LOG_LEVEL": "debug",
+    "OPENCLAW_CRASH_RESTART_DELAY": "10s"
+  },
+  "description": {
+    "OPENCLAW_HEALTH_CHECK_INTERVAL": "Run health checks every 30s (from default 60s)",
+    "OPENCLAW_HEALTH_CHECK_TIMEOUT": "5s timeout for health check operations",
+    "OPENCLAW_PROVIDER_RESTART_MAX_RETRIES": "Retry provider restart up to 3 times before giving up",
+    "OPENCLAW_TELEGRAM_GETUPDATE_TIMEOUT": "5s timeout for Telegram getUpdates to prevent hanging",
+    "OPENCLAW_WEBSOCKET_HEARTBEAT_INTERVAL": "Send WebSocket heartbeat every 30s",
+    "OPENCLAW_WEBSOCKET_IDLE_TIMEOUT": "Close idle WebSocket connections after 60s",
+    "OPENCLAW_TOOLS_ALLOWLIST_RELOAD_INTERVAL": "Reload tool allowlist every hour",
+    "OPENCLAW_LOG_LEVEL": "debug for better P0 detection",
+    "OPENCLAW_CRASH_RESTART_DELAY": "Wait 10s before restarting crashed providers"
+  },
+  "implementation_steps": [
+    "1. Export these env vars in docker-compose.yml environment section",
+    "2. Run: docker-compose down && docker-compose up -d",
+    "3. Verify: docker logs openclaw-agent | grep 'OPENCLAW_'",
+    "4. Monitor: tail -f /tmp/p0-monitor-dispatcher.log"
+  ],
+  "expected_improvements": {
+    "P0.1": "Health-monitor stuck will be detected faster (30s instead of 60s)",
+    "P0.2": "Telegram getUpdates timeout prevents hanging, faster detection",
+    "P0.3": "WebSocket heartbeat prevents 1006 disconnects",
+    "P0.4": "Tool allowlist reloading ensures consistency"
+  }
+}
