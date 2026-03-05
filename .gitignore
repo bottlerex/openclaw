@@ -72,3 +72,4 @@ tool-wrapper-proxy.js.v*
 config.backup-*/
 vendor/
 data/rag-index.sqlite
+.state
