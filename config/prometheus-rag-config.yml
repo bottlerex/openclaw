@@ -1,0 +1,48 @@
+# OpenClaw RAG Monitoring - Prometheus Configuration
+# Add this to your Prometheus scrape_configs section
+
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+  external_labels:
+    cluster: 'openclaw'
+    environment: 'production'
+
+scrape_configs:
+  # OpenClaw RAG Metrics Exporter
+  - job_name: 'openclaw-rag-metrics'
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['127.0.0.1:9091']
+        labels:
+          service: 'rag-monitoring'
+          component: 'metrics-exporter'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__scheme__]
+        target_label: scheme
+    # Metric relabeling to add custom labels
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'rag_.*'
+        action: 'keep'
+
+  # Optional: System metrics from Node Exporter (if deployed)
+  # - job_name: 'openclaw-system'
+  #   static_configs:
+  #     - targets: ['127.0.0.1:9100']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['127.0.0.1:9093']  # AlertManager address
+
+rule_files:
+  - '/Users/rexmacmini/openclaw/config/rag-alerting-rules.yaml'
+
+# Service discovery (optional)
+# consul_sd_configs:
+#   - server: 'localhost:8500'
