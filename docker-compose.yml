@@ -4,6 +4,7 @@ networks:
 services:
   openclaw:
     container_name: openclaw-agent
+    env_file: .env
     deploy:
       resources:
         limits:
@@ -14,12 +15,8 @@ services:
     - net.ipv6.conf.default.disable_ipv6=1
     environment:
     - OPENCLAW_CONSENT_MODE=false
-    - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-    - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
-    - GOG_DEFAULT_ACCOUNT=${GOG_DEFAULT_ACCOUNT}
-    - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-    - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-    - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+    - OPENCLAW_GATEWAY_PORT=18789
+    - OPENCLAW_BRIDGE_PORT=18790
     - ENABLE_CALENDAR=true
     - ENABLE_GMAIL=true
     - ENABLE_DRIVE=true
@@ -27,9 +24,6 @@ services:
     - SCHEDULE_DAILY_DIGEST=09:00
     - TIMEZONE=Asia/Taipei
     - OPENCLAW_PRIMARY_MODEL=cliproxy/claude-haiku-4-5-20251001
-    - BRAVE_API_KEY=${BRAVE_API_KEY}
-    - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-    - TELEGRAM_GOAL_ALERTS_BOT_TOKEN=${TELEGRAM_GOAL_ALERTS_BOT_TOKEN}
     - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --dns-result-order=ipv4first
     - OPENCLAW_HEALTH_CHECK_INTERVAL=30s
     - OPENCLAW_HEALTH_CHECK_TIMEOUT=5s
@@ -46,7 +40,7 @@ services:
     networks:
     - openclaw-isolated
     ports:
-    - 0.0.0.0:18789:18789
+    - 127.0.0.1:18788:18789
     - 0.0.0.0:9091:9090
     restart: unless-stopped
     volumes:
@@ -61,3 +55,18 @@ services:
     - /Users/rexmacmini/Project/active_projects:/home/node/projects
     extra_hosts:
     - host.docker.internal:host-gateway
+
+  nginx-https-proxy:
+    image: nginx:latest
+    container_name: openclaw-https-proxy
+    networks:
+    - openclaw-isolated
+    ports:
+    - 0.0.0.0:18789:18789
+    volumes:
+    - ./config/nginx:/etc/nginx/conf.d:ro
+    - ./certs:/etc/nginx/certs:ro
+    depends_on:
+    - openclaw
+    restart: unless-stopped
+    command: nginx -g 'daemon off;'

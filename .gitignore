@@ -73,3 +73,4 @@ config.backup-*/
 vendor/
 data/rag-index.sqlite
 .state
+.logs/

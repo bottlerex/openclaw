@@ -1,7 +1,7 @@
 # Claude Knowledge Summary (Auto-generated)
 
 > **source**: claude
-> **synced_at**: 2026-03-06T02:00:01Z
+> **synced_at**: 2026-03-06T06:00:00Z
 > **authority**: read-only
 > **warning**: This file is auto-generated. Do NOT edit manually.
 
@@ -14,8 +14,8 @@
 |------|------|--------|
 | Taiwan Stock MVP | ✅ 完全運作 | 2026-03-05 |
 | PM Skills 整合 (pm-finance) | ✅ Phase 3 進行中 | 2026-03-05 |
-| **OpenClaw P1 規劃** | ✅ **完成 (commit 0bbda55e5)** | 2026-03-06 |
-| OpenClaw P0 Recovery | ✅ 生產就緒 | 2026-03-05 |
+| **OpenClaw P1.1 — RAG Performance Monitoring** | ✅ **完成 (Phase 1-5)** | 2026-03-06 |
+| **OpenClaw P0 — 自動恢復系統** | ✅ **完全部署 (Layer 1-4 運作)** | 2026-03-06 |
 | Alert Escalation System v2 | ✅ **WEEK 3 COMPLETE** (M1-M7 全部通過) | 2026-03-05 |
 | 雙機三層同步 | ✅ 正常 | 2026-02-20 |
 | Enforcement Kernel v1.2 | ✅ 部署 | 2026-03-02 |
