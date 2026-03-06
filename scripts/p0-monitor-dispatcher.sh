@@ -1,68 +1,124 @@
 #!/bin/bash
-# OpenClaw P0 Monitor Dispatcher
-# Runs every 5 minutes to check for P0 errors and dispatch recoveries
-# This is simpler than running 4 separate continuous processes
+# OpenClaw P0 Monitor Dispatcher — Final v3 (macOS compatible)
 
 set -e
 
 CONTAINER_NAME="openclaw-agent"
 LOG_FILE="/tmp/p0-monitor-dispatcher.log"
-SCRIPT_DIR="/Users/rexmacmini/openclaw/scripts"
+TELEGRAM_CHAT="150944774"
+RECOVERY_ATTEMPTS=3
 
 log() {
-  local timestamp=$(date '+%Y-%m-%dT%H:%M:%S.000Z')
+  # macOS compatible date format
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")
   echo "[$timestamp] $1" >> "$LOG_FILE"
 }
 
-# Check if container is running
-if ! docker inspect "$CONTAINER_NAME" > /dev/null 2>&1; then
-  log "❌ Container $CONTAINER_NAME not running, exiting"
+send_telegram() {
+  local msg="$1"
+  curl -s -X POST http://localhost:18789/telegram/send \
+    -H "Content-Type: application/json" \
+    -d "{\"to\": \"$TELEGRAM_CHAT\", \"text\": \"$msg\"}" 2>/dev/null || true
+}
+
+# ============ CRITICAL: Check if container is RUNNING ============
+IS_RUNNING=$(docker inspect "$CONTAINER_NAME" --format='{{.State.Running}}' 2>/dev/null || echo "false")
+
+if [ "$IS_RUNNING" != "true" ]; then
+  log "🚨 P0 CRITICAL: Container $CONTAINER_NAME is NOT RUNNING"
+  log "  → Initiating auto-restart sequence..."
+  
+  attempt=1
+  while [ $attempt -le $RECOVERY_ATTEMPTS ]; do
+    log "  → Restart attempt $attempt/$RECOVERY_ATTEMPTS"
+    
+    if docker start "$CONTAINER_NAME" 2>&1 > /dev/null; then
+      log "  ✅ docker start succeeded"
+      
+      sleep 10  # Wait for container to settle
+      
+      IS_RUNNING=$(docker inspect "$CONTAINER_NAME" --format='{{.State.Running}}' 2>/dev/null || echo "false")
+      if [ "$IS_RUNNING" = "true" ]; then
+        log "  ✅ Container confirmed RUNNING"
+        
+        # Wait for gateway health
+        for i in {1..10}; do
+          if curl -s http://localhost:18789/health > /dev/null 2>&1; then
+            log "  ✅ Gateway health check PASS"
+            send_telegram "✅ OPENCLAW AUTO-RECOVERY SUCCESS\n⏰ Time: $(date)\n✓ Container restarted\n✓ Gateway online"
+            exit 0
+          fi
+          sleep 1
+        done
+        
+        log "  ⚠️  Container running, gateway not ready yet"
+        exit 0
+      else
+        log "  ❌ Container still not running (attempt $attempt)"
+      fi
+    else
+      log "  ❌ docker start failed (attempt $attempt)"
+    fi
+    
+    attempt=$((attempt + 1))
+    [ $attempt -le $RECOVERY_ATTEMPTS ] && sleep 5
+  done
+  
+  log "❌ P0 CRITICAL: AUTO-RESTART FAILED after $RECOVERY_ATTEMPTS attempts"
+  send_telegram "❌ OPENCLAW P0 CRITICAL: AUTO-RESTART FAILED\n⏰ Time: $(date)\n🔗 Manual intervention required"
   exit 1
 fi
 
-# Get recent logs
+# ============ NORMAL MONITORING ============
+log "✅ Container running, checking for P0 issues..."
+
 RECENT_LOGS=$(docker logs "$CONTAINER_NAME" --since 5m 2>/dev/null || echo "")
 
 # P0.1: Telegram stuck
 if echo "$RECENT_LOGS" | grep -q "health-monitor.*stuck"; then
-  log "🚨 P0.1 Detected: Telegram health-monitor stuck"
-  log "  → Executing telegram recovery..."
-  docker restart "$CONTAINER_NAME" 2>&1 | head -3
-  log "  ✅ Container restarted"
-fi
-
-# P0.2: Telegram 409 conflict
-if echo "$RECENT_LOGS" | grep -q "409: Conflict"; then
-  log "🚨 P0.2 Detected: Telegram 409 conflict"
-  log "  → Executing telegram recovery..."
-  docker restart "$CONTAINER_NAME" 2>&1 | head -3
-  sleep 5
-  log "  ✅ Container restarted"
-fi
-
-# P0.3: WebSocket 1006
-if echo "$RECENT_LOGS" | grep -q "code=1006"; then
-  log "⚠️  P0.3 Detected: WebSocket disconnect code=1006"
-  # Check memory usage
-  MEM_PERCENT=$(docker stats "$CONTAINER_NAME" --no-stream --format "{{.MemPerc}}" 2>/dev/null | sed 's/%//' || echo "0")
-  if (( $(echo "$MEM_PERCENT > 80" | bc -l 2>/dev/null || echo "0") )); then
-    log "  → Memory usage high ($MEM_PERCENT%), restarting container"
-    docker restart "$CONTAINER_NAME" 2>&1 | head -3
-  else
-    log "  → Memory normal ($MEM_PERCENT%), client-side reconnection expected"
+  log "🚨 P0.1: Telegram health-monitor stuck"
+  if docker restart "$CONTAINER_NAME" 2>&1 > /dev/null; then
+    log "  ✅ Restarted"
+    send_telegram "✅ P0.1: Telegram health-monitor recovered"
   fi
 fi
 
-# P0.4: Tools allowlist miss + timeout not found
-if echo "$RECENT_LOGS" | grep -qE "exec.*denied|timeout: not found"; then
-  log "⚠️  P0.4 Detected: Tool execution denied or timeout command missing"
-  log "  → Action: timeout command must be installed in Docker image"
-  log "  → Temporary: Review logs at docker logs $CONTAINER_NAME"
+# P0.2: Telegram 409
+if echo "$RECENT_LOGS" | grep -q "409: Conflict"; then
+  log "🚨 P0.2: Telegram 409 Conflict"
+  if docker restart "$CONTAINER_NAME" 2>&1 > /dev/null; then
+    sleep 5
+    log "  ✅ Restarted"
+    send_telegram "✅ P0.2: Telegram 409 Conflict recovered"
+  fi
 fi
 
-# Health check
-if curl -s http://localhost:18789/health 2>/dev/null | grep -q '"ok":true'; then
-  log "✅ Container health: OK"
-else
-  log "⚠️  Container health check inconclusive"
+# P0.3: WebSocket 1006 + high memory
+if echo "$RECENT_LOGS" | grep -q "code=1006"; then
+  log "⚠️  P0.3: WebSocket 1006"
+  MEM_PERCENT=$(docker stats "$CONTAINER_NAME" --no-stream --format "{{.MemPerc}}" 2>/dev/null | sed 's/%//' || echo "0")
+  
+  if (( $(echo "$MEM_PERCENT > 85" | bc -l 2>/dev/null || echo "0") )); then
+    log "  → Memory high ($MEM_PERCENT%), restarting"
+    if docker restart "$CONTAINER_NAME" 2>&1 > /dev/null; then
+      log "  ✅ Restarted"
+      send_telegram "✅ P0.3: WebSocket memory leak recovered (${MEM_PERCENT}%)"
+    fi
+  else
+    log "  → Memory OK ($MEM_PERCENT%)"
+  fi
 fi
+
+# P0.4: Tools issue
+if echo "$RECENT_LOGS" | grep -qE "exec.*denied|timeout: not found"; then
+  log "⚠️  P0.4: Tool execution issue (requires code fix)"
+fi
+
+# Final check
+if curl -s http://localhost:18789/health > /dev/null 2>&1; then
+  log "✅ Health check: PASS"
+else
+  log "⚠️  Health check: No response"
+fi
+
+exit 0

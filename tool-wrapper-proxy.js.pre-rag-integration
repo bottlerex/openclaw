@@ -14,7 +14,6 @@ const { execFile, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const ollamaRouter = require('./ollama-router');
-const { createMonitoredSkillCall } = require('./src/monitoring/rag-skill-wrapper.cjs');
 
 const UPSTREAM_HOST = 'localhost';
 const UPSTREAM_PORT = 3456;
@@ -918,7 +917,7 @@ function runCliCommand(cmd) {
 
 // ─── Generic Skill API Caller ──────────────────────────────────
 
-function _originalCallSkill(skillName, params) {
+function callSkill(skillName, params) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       skill_name: skillName,
@@ -953,12 +952,6 @@ function _originalCallSkill(skillName, params) {
     if (method !== 'GET') req.write(body);
     req.end();
   });
-}
-
-// ─── RAG Monitoring Wrapper ──────────────────────────────────
-
-async function callSkill(skillName, params) {
-  return createMonitoredSkillCall(skillName, params, _originalCallSkill);
 }
 
 // ─── Format Skill Results ──────────────────────────────────────

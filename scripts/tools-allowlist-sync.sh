@@ -1,86 +1,107 @@
 #!/bin/bash
-# OpenClaw P0.4 Auto-Recovery: Tools allowlist and timeout command missing
-# Detects missing commands and updates allowlist automatically
+# OpenClaw P0.4: Tools Allowlist Auto-Sync
+# Runs daily to sync allowed commands from logs to config
 
 set -e
 
 CONTAINER_NAME="openclaw-agent"
+ALLOWLIST_FILE="/tmp/openclaw-allowlist.json"
 LOG_FILE="/tmp/tools-allowlist-sync.log"
-CHECK_INTERVAL=3600  # 1 hour
-CONFIG_PATH="/Users/rexmacmini/openclaw/config/exec-approvals.json"
+BACKUP_DIR="/tmp/allowlist-backups"
 
 log() {
-  local timestamp=$(date '+%Y-%m-%dT%H:%M:%S.000Z')
-  echo "[$timestamp] $1" | tee -a "$LOG_FILE"
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")
+  echo "[$timestamp] $1" >> "$LOG_FILE"
 }
 
-# Check for missing tools/commands in logs
-check_missing_tools() {
-  docker logs "$CONTAINER_NAME" --since 24h 2>/dev/null | grep "exec failed" | tail -10
-}
+# Initialize
+mkdir -p "$BACKUP_DIR"
 
-# Verify timeout command exists in container
-verify_timeout_command() {
-  local result=$(docker exec "$CONTAINER_NAME" which timeout 2>/dev/null || true)
-  if [ -z "$result" ]; then
-    log "❌ timeout command not found in container"
-    return 1
-  else
-    log "✅ timeout command available at: $result"
-    return 0
+log "🚀 Tools Allowlist Sync started"
+
+# Step 1: Extract recently used commands from container logs (last 24 hours)
+log "📋 Extracting used commands from logs..."
+
+RECENT_COMMANDS=$(docker logs "$CONTAINER_NAME" --since 24h 2>/dev/null | \
+  grep -oE "(exec|bash|sh|python|node|npm|docker|curl|git|jq)\s+[^\s]+" | \
+  awk '{print $1}' | \
+  sort | uniq -c | sort -rn | \
+  awk '{print $2}' || echo "")
+
+if [ -z "$RECENT_COMMANDS" ]; then
+  log "⚠️  No commands found in recent logs"
+  exit 0
+fi
+
+log "✅ Found commands: $(echo "$RECENT_COMMANDS" | wc -l)"
+
+# Step 2: Build new allowlist
+log "🔨 Building new allowlist..."
+
+NEW_ALLOWLIST='{
+  "version": "1.0",
+  "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")'",
+  "source": "auto-sync from container logs",
+  "rules": ['
+
+# Add commands
+FIRST=true
+while read -r cmd; do
+  if [ -n "$cmd" ]; then
+    if [ "$FIRST" = true ]; then
+      FIRST=false
+    else
+      NEW_ALLOWLIST+=","
+    fi
+    
+    NEW_ALLOWLIST+=$'\n    '"{"
+    NEW_ALLOWLIST+=$'\n      "path": "'"$cmd"'",'
+    NEW_ALLOWLIST+=$'\n      "allowed": true,'
+    NEW_ALLOWLIST+=$'\n      "requireApproval": false,'
+    NEW_ALLOWLIST+=$'\n      "detectedAt": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")'"'
+    NEW_ALLOWLIST+=$'\n    '"}"
   fi
-}
+done <<< "$RECENT_COMMANDS"
 
-# Update allowlist for missing tools
-add_to_allowlist() {
-  local tool_path=$1
-  log "📝 Adding to allowlist: $tool_path"
+NEW_ALLOWLIST+=$'\n  ]\n}'
 
-  # Add entry if it doesn't exist
-  if ! grep -q "\"path\": \"$tool_path\"" "$CONFIG_PATH"; then
-    # Backup original
-    cp "$CONFIG_PATH" "${CONFIG_PATH}.backup-$(date +%s)"
+# Step 3: Backup existing allowlist
+if [ -f "$ALLOWLIST_FILE" ]; then
+  BACKUP_FILE="$BACKUP_DIR/allowlist-$(date -u +%Y%m%d-%H%M%S 2>/dev/null || date +%Y%m%d-%H%M%S).json.bak"
+  cp "$ALLOWLIST_FILE" "$BACKUP_FILE"
+  log "💾 Backed up old allowlist to $BACKUP_FILE"
+fi
 
-    # Add new entry (simplified - assumes JSON structure)
-    # This is a simplified version; in production, use jq
-    sed -i '' "s|\"path\": \"[^\"]*\"$|\"path\": \"$tool_path\"|" "$CONFIG_PATH" || true
-    log "  → Added: $tool_path"
+# Step 4: Write new allowlist
+echo "$NEW_ALLOWLIST" > "$ALLOWLIST_FILE"
+log "✅ New allowlist written: $ALLOWLIST_FILE ($(wc -l < "$ALLOWLIST_FILE") lines)"
+
+# Step 5: Validate JSON
+if ! jq . "$ALLOWLIST_FILE" > /dev/null 2>&1; then
+  log "❌ New allowlist JSON validation failed"
+  # Restore from backup if available
+  if [ -f "$BACKUP_FILE" ]; then
+    cp "$BACKUP_FILE" "$ALLOWLIST_FILE"
+    log "🔄 Restored from backup"
   fi
-}
+  exit 1
+fi
 
-# Main sync logic
-sync_allowlist() {
-  log "🔄 Syncing tools allowlist..."
+log "✅ JSON validation passed"
 
-  # Common missing tools
-  local common_tools=(
-    "/usr/bin/timeout"
-    "/bin/timeout"
-    "/usr/local/bin/timeout"
-    "/usr/local/bin/openclaw-shell.sh"
-  )
+# Step 6: Report
+RULE_COUNT=$(jq '.rules | length' "$ALLOWLIST_FILE")
+log "📊 Allowlist updated: $RULE_COUNT rules"
 
-  for tool in "${common_tools[@]}"; do
-    docker exec "$CONTAINER_NAME" test -f "$tool" 2>/dev/null && {
-      log "  ✅ Found: $tool"
-    } || {
-      log "  ⚠️  Not found: $tool (may be installed in container, skipping)"
-    }
-  done
+# Step 7: Cleanup old backups (keep only 7 days)
+find "$BACKUP_DIR" -name "allowlist-*.json.bak" -mtime +7 -delete
+log "🧹 Cleaned up old backups (>7 days)"
 
-  # Verify critical timeout command
-  if ! verify_timeout_command; then
-    log "🚨 timeout command missing - this will cause exec failures"
-    log "  → Action: Rebuild Dockerfile with 'apt-get install coreutils'"
-  fi
-}
+log "✅ Sync completed successfully"
 
-log "=== Tools Allowlist Sync Started ==="
-log "Container: $CONTAINER_NAME"
-log "Config: $CONFIG_PATH"
-log "Sync interval: ${CHECK_INTERVAL}s (1 hour)"
+# Send Telegram notification
+curl -s -X POST http://localhost:18789/telegram/send \
+  -H "Content-Type: application/json" \
+  -d "{\"to\": \"150944774\", \"text\": \"✅ P0.4: Tools allowlist synced\n• Rules: $RULE_COUNT\n• Time: $(date)\"}" 2>/dev/null || true
 
-while true; do
-  sync_allowlist
-  sleep "$CHECK_INTERVAL"
-done
+exit 0
