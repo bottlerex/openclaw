@@ -9,7 +9,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execFile, exec, spawn } = require("child_process");
+const { execFile, spawn } = require('child_process');
 
 // ─── Configuration ───────────────────────────────────────────────
 
@@ -262,40 +262,6 @@ function writeHeartbeat() {
 // ─── Route Handlers ──────────────────────────────────────────────
 
 const routes = {};
-
-// POST /shell/exec — rex-agent general command execution
-routes['POST /shell/exec'] = async (body) => {
-  const { command, cwd } = body;
-  if (!command || typeof command !== 'string') {
-    throw Object.assign(new Error('command required'), { status: 400 });
-  }
-  const BLACKLIST = [
-    /rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+|--force\s+)*(\/|~|$HOME)/,
-    /rm\s+-rf\b/,
-    /mkfs/,
-    /dd\s+if=\/dev/,
-    /:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;?\s*:/,
-    />\s*\/dev\/sd/,
-    /chmod\s+-R\s+777\s+\//,
-    /wget.*\|\s*sh/,
-    /curl.*\|\s*sh/,
-    /shutdown/,
-    /reboot/,
-    /launchctl\s+bootout/,
-  ];
-  if (BLACKLIST.some(p => p.test(command))) {
-    throw Object.assign(new Error('blocked: dangerous command'), { status: 403 });
-  }
-  return await new Promise((resolve, reject) => {
-    const opts = { timeout: 30000, maxBuffer: MAX_OUTPUT };
-    if (cwd) opts.cwd = cwd;
-    exec(command, opts, (err, stdout, stderr) => {
-      const output = (stdout + (stderr || '')).trim() || '(no output)';
-      resolve({ ok: !err, output: output.slice(0, MAX_OUTPUT) });
-    });
-  });
-};
-
 
 // GET /health
 routes['GET /health'] = async () => {

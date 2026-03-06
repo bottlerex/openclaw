@@ -13,7 +13,7 @@ const http = require('http');
 const { execFile, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const ollamaRouter = require('./ollama-router');
+const ollamaRouter = require("./ollama-router.cjs");
 const { createMonitoredSkillCall } = require('./src/monitoring/rag-skill-wrapper.cjs');
 
 const UPSTREAM_HOST = 'localhost';
