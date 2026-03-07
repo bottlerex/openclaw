@@ -33,7 +33,9 @@ services:
     - OPENCLAW_WEBSOCKET_IDLE_TIMEOUT=60s
     - OPENCLAW_TOOLS_ALLOWLIST_RELOAD_INTERVAL=3600s
     - OPENCLAW_LOG_LEVEL=debug
+    - SESSION_BRIDGE_URL=http://host.docker.internal:7788
     - OPENCLAW_CRASH_RESTART_DELAY=10s
+    - GIT_CONFIG_GLOBAL=/home/node/.openclaw/.gitconfig
     - NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
     - OPENCLAW_NO_RESPAWN=1
     image: ghcr.io/openclaw/openclaw:main
@@ -49,10 +51,10 @@ services:
     - ./calendar_cache:/home/node/calendar_cache
     - ./gog-cli/gog:/usr/local/bin/gog:ro
     - ./gog-config:/home/node/.config/gogcli
-    - ./ssh-keys:/home/node/.ssh
+    - ./ssh-keys:/home/node/.ssh:ro
     - /Users/rexmacmini/.claude/projects/-Users-rexmacmini/memory:/home/node/claude-memory:ro
     - /Users/rexmacmini/.claude/rules:/home/node/claude-rules:ro
-    - /Users/rexmacmini/Project/active_projects:/home/node/projects
+    - /Users/rexmacmini/Project/active_projects:/home/node/projects:ro
     extra_hosts:
     - host.docker.internal:host-gateway
 

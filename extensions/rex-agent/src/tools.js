@@ -5,8 +5,112 @@ import path from "path";
 
 // ─── Configuration ─────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const SESSION_BRIDGE_URL = process.env.SESSION_BRIDGE_URL || "http://localhost:7788";
+const SESSION_BRIDGE_URL = process.env.SESSION_BRIDGE_URL || "http://host.docker.internal:7788";
 const AGENTD_URL = "http://127.0.0.1:7777";
+// ─── Project Routing ──────────────────────────────────────────
+const PROJECTS_FILE = path.join(process.env.HOME || "/Users/rexmacmini", ".openclaw/projects.json");
+
+let _projCache = null;
+let _projCacheTs = 0;
+
+function loadProjectMap() {
+  if (_projCache && Date.now() - _projCacheTs < 5000) return _projCache;
+  try {
+    _projCache = JSON.parse(fs.readFileSync(PROJECTS_FILE, "utf8"));
+    _projCacheTs = Date.now();
+  } catch {
+    _projCache = {};
+  }
+  return _projCache;
+}
+
+function resolveProjectCwd(project) {
+  if (!project) return "/Users/rexmacmini";
+  const map = loadProjectMap();
+  return map[project.toLowerCase().trim()] || `/Users/rexmacmini/${project}`;
+}
+// ─── Task Registry (JSONL) ────────────────────────────────────
+import crypto from "crypto";
+
+const TASKS_FILE = path.join(process.env.HOME || "/Users/rexmacmini", ".openclaw/dev-tasks.jsonl");
+const WEBHOOK_SECRET_FILE = path.join(process.env.HOME || "/Users/rexmacmini", ".openclaw/.webhook-secret");
+const MAX_SESSIONS = 2;
+let _spawnLock = false;
+
+function getWebhookSecret() {
+  if (!_webhookSecretCached) {
+    try {
+      _webhookSecretCached = fs.readFileSync(WEBHOOK_SECRET_FILE, "utf8").trim();
+    } catch {
+      _webhookSecretCached = crypto.randomUUID();
+      try { fs.writeFileSync(WEBHOOK_SECRET_FILE, _webhookSecretCached, "utf8"); } catch {}
+    }
+  }
+  return _webhookSecretCached;
+}
+let _webhookSecretCached = null;
+
+function loadTaskEvents() {
+  try {
+    const raw = fs.readFileSync(TASKS_FILE, "utf8").trim();
+    if (!raw) return [];
+    return raw.split("\n").map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+function appendTaskEvent(event) {
+  const line = JSON.stringify(event) + "\n";
+  fs.appendFileSync(TASKS_FILE, line, "utf8");
+}
+
+function getNextTaskNum() {
+  const events = loadTaskEvents();
+  let maxNum = 0;
+  for (const e of events) {
+    if (e.taskNum && e.taskNum > maxNum) maxNum = e.taskNum;
+  }
+  return maxNum + 1;
+}
+
+function getActiveTasks() {
+  const events = loadTaskEvents();
+  const tasks = new Map();
+  for (const e of events) {
+    if (e.event === "create") {
+      tasks.set(e.taskNum, { ...e, status: "running" });
+    } else if (e.event === "complete" || e.event === "cancel") {
+      const t = tasks.get(e.taskNum);
+      if (t) {
+        t.status = e.event === "complete" ? "completed" : "cancelled";
+        t.completedAt = e.ts;
+        if (e.durationMs) t.durationMs = e.durationMs;
+      }
+    }
+  }
+  return tasks;
+}
+
+function getRunningTasks() {
+  const all = getActiveTasks();
+  const running = [];
+  for (const [num, task] of all) {
+    if (task.status === "running") running.push(task);
+  }
+  return running;
+}
+
+function formatDuration(ms) {
+  if (!ms) return "unknown";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "<1 min";
+  if (min < 60) return `${min} min`;
+  const hrs = Math.floor(min / 60);
+  return `${hrs}h ${min % 60}m`;
+}
+
+
 
 // Read token for mac-agentd (sync for startup)
 function getAgentdToken() {
@@ -96,6 +200,33 @@ const TOOLS = [
       },
     },
   },
+
+  {
+    type: "function",
+    function: {
+      name: "dev_status",
+      description: "查詢目前開發任務狀態",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "dev_cancel",
+      description: "取消開發任務",
+      parameters: {
+        type: "object",
+        properties: {
+          task_number: { type: "number", description: "任務編號（從 dev_status 取得）" },
+        },
+        required: ["task_number"],
+      },
+    },
+  },
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────
@@ -166,12 +297,28 @@ async function callGemini(question, fileContent) {
 // ─── Claude Session Bridge ────────────────────────────────────
 
 async function callSessionBridge(task, project) {
-  const cwd = project
-    ? `/Users/rexmacmini/${project}`
-    : "/Users/rexmacmini";
+  const cwd = resolveProjectCwd(project);
 
-  console.log(`[SESSION] Spawning: cwd=${cwd}, prompt=${task.slice(0, 80)}`);
+  // Concurrency guard
+  if (_spawnLock) return "系統忙碌中，請稍後再試。";
+  _spawnLock = true;
   try {
+    // Check running sessions
+    try {
+      const listRes = await fetch(`${SESSION_BRIDGE_URL}/session/list`);
+      if (listRes.ok) {
+        const data = await listRes.json();
+        const running = (data.sessions || []).filter((s) => s.state !== "stopped");
+        if (running.length >= MAX_SESSIONS) {
+          return `目前已有 ${running.length} 個開發任務在執行中，請等待完成或取消後再試。`;
+        }
+      }
+    } catch {}
+
+    const taskNum = getNextTaskNum();
+    const webhookSecret = getWebhookSecret();
+
+    console.log(`[SESSION] Spawning: cwd=${cwd}, task=${task.slice(0, 80)}, taskNum=${taskNum}`);
     const createRes = await fetch(`${SESSION_BRIDGE_URL}/session/spawn`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -182,27 +329,69 @@ async function callSessionBridge(task, project) {
         mode: "remote",
         permissionMode: "bypassPermissions",
         maxTurns: 20,
+        _taskMeta: {
+          taskNum,
+          project: project || null,
+          webhookSecret,
+        },
       }),
     });
     if (!createRes.ok) {
       const errBody = await createRes.text();
-      throw new Error(
-        `Session Bridge spawn error: ${createRes.status} ${errBody}`
-      );
+      throw new Error(`Session Bridge spawn error: ${createRes.status} ${errBody}`);
     }
     const session = await createRes.json();
     const sessionId = session.sessionId;
-    console.log(`[SESSION] Spawned: ${sessionId}, pid=${session.pid}`);
+    console.log(`[SESSION] Spawned: ${sessionId}, pid=${session.pid}, taskNum=${taskNum}`);
+
+    // Record task
+    appendTaskEvent({
+      event: "create",
+      taskNum,
+      project: project || null,
+      task,
+      sessionId,
+      ts: new Date().toISOString(),
+    });
+
+    // Auto-timeout: stop session after 30 min
+    setTimeout(async () => {
+      try {
+        const listRes = await fetch(`${SESSION_BRIDGE_URL}/session/list`);
+        if (listRes.ok) {
+          const data = await listRes.json();
+          const s = (data.sessions || []).find((x) => x.id === sessionId);
+          if (s && s.state !== "stopped") {
+            console.log(`[SESSION] Auto-timeout: stopping ${sessionId} after 30 min`);
+            await fetch(`${SESSION_BRIDGE_URL}/session/${encodeURIComponent(sessionId)}/stop`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ force: false }),
+            });
+            appendTaskEvent({
+              event: "complete",
+              taskNum,
+              durationMs: 30 * 60 * 1000,
+              reason: "timeout",
+              ts: new Date().toISOString(),
+            });
+          }
+        }
+      } catch {}
+    }, 30 * 60 * 1000);
 
     return (
-      `🚀 開發任務已派發給 Claude\n\n` +
+      `🚀 開發任務 #${taskNum} 已派發給 Claude\n\n` +
       `Session: ${sessionId}\n` +
       `目錄: ${cwd}\n` +
       `任務: ${task}\n\n` +
-      `Claude 完成後會透過 Telegram 通知你。`
+      `Claude 完成後會透過 Telegram 通知你。\n` +
+      `查看狀態: 問「目前任務」或使用 dev_status`
     );
   } catch (err) {
     return `❌ Session Bridge 失敗: ${err.message}`;
+  } finally {
+    _spawnLock = false;
   }
 }
 
@@ -236,6 +425,43 @@ async function executeTool(name, args) {
     case "dev_task": {
       const { task, project } = args;
       return await callSessionBridge(task, project);
+    }
+
+
+    case "dev_status": {
+      const running = getRunningTasks();
+      if (running.length === 0) return "目前沒有開發任務在執行中。";
+      const lines = running.map((t, i) => {
+        const elapsed = Date.now() - new Date(t.ts).getTime();
+        return `${t.taskNum}. [${t.project || "unknown"}] ${t.task} — running (${formatDuration(elapsed)})`;
+      });
+      return `目前有 ${running.length} 個開發任務：\n${lines.join("\n")}`;
+    }
+
+    case "dev_cancel": {
+      const { task_number } = args;
+      const all = getActiveTasks();
+      const task = all.get(task_number);
+      if (!task) return `找不到任務 #${task_number}`;
+      if (task.status !== "running") return `任務 #${task_number} 已經是 ${task.status} 狀態`;
+
+      // Stop the session
+      if (task.sessionId) {
+        try {
+          await fetch(`${SESSION_BRIDGE_URL}/session/${encodeURIComponent(task.sessionId)}/stop`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ force: false }),
+          });
+        } catch {}
+      }
+
+      appendTaskEvent({
+        event: "cancel",
+        taskNum: task_number,
+        ts: new Date().toISOString(),
+      });
+      return `已取消任務 #${task_number}: ${task.task}`;
     }
 
     default:
