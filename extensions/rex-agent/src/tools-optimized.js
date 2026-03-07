@@ -48,6 +48,21 @@ function getWebhookSecret() {
   return _webhookSecretCached;
 }
 let _webhookSecretCached = null;
+const SPAWN_TOKEN_FILE = path.join(process.env.HOME || "/Users/rexmacmini", ".claude/services/session-bridge/.spawn-token");
+let _spawnTokenCached = null;
+
+function getSpawnToken() {
+  if (!_spawnTokenCached) {
+    try {
+      _spawnTokenCached = fs.readFileSync(SPAWN_TOKEN_FILE, "utf8").trim();
+    } catch {
+      console.error("[rex-agent] ERROR: .spawn-token not found — dev_task will fail");
+      return null;
+    }
+  }
+  return _spawnTokenCached;
+}
+
 
 function loadTaskEvents() {
   try {
@@ -275,9 +290,13 @@ async function callSessionBridge(task, project) {
     const webhookSecret = getWebhookSecret();
 
     console.log(`[SESSION] Spawning: cwd=${cwd}, task=${task.slice(0, 80)}, taskNum=${taskNum}`);
+    const spawnToken = getSpawnToken();
+    if (!spawnToken) {
+      return "\u274c Session Bridge spawn token \u672a\u914d\u7f6e\uff0c\u7121\u6cd5\u6d3e\u767c\u4efb\u52d9\u3002";
+    }
     const createRes = await fetch(`${SESSION_BRIDGE_URL}/session/spawn`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Spawn-Token": spawnToken },
       body: JSON.stringify({
         provider: "claude",
         cwd,
