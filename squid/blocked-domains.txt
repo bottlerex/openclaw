@@ -1,0 +1,6 @@
+# Blocked dangerous domains (mining, malware, C2)
+.xmrig.com
+.moneropool.com
+.minergate.com
+.nicehash.com
+malware-c2-server.com

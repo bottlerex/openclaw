@@ -1,6 +1,17 @@
 networks:
   openclaw-isolated:
     driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 192.168.107.0/24
+          gateway: 192.168.107.1
+  openclaw-external:
+    ipam:
+      config:
+        - subnet: 192.168.108.0/24
+    driver: bridge
+
 services:
   openclaw:
     container_name: openclaw-agent
@@ -24,7 +35,7 @@ services:
     - SCHEDULE_DAILY_DIGEST=09:00
     - TIMEZONE=Asia/Taipei
     - OPENCLAW_PRIMARY_MODEL=cliproxy/claude-haiku-4-5-20251001
-    - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --dns-result-order=ipv4first
+    - NODE_OPTIONS=--require /home/node/.openclaw/force-ipv4.cjs --require /home/node/.openclaw/proxy-bootstrap.cjs --dns-result-order=ipv4first
     - OPENCLAW_HEALTH_CHECK_INTERVAL=30s
     - OPENCLAW_HEALTH_CHECK_TIMEOUT=5s
     - OPENCLAW_PROVIDER_RESTART_MAX_RETRIES=3
@@ -38,9 +49,17 @@ services:
     - GIT_CONFIG_GLOBAL=/home/node/.openclaw/.gitconfig
     - NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
     - OPENCLAW_NO_RESPAWN=1
+    - HTTP_PROXY=http://192.168.107.4:3128
+    - HTTPS_PROXY=http://192.168.107.4:3128
+    - http_proxy=http://192.168.107.4:3128
+    - https_proxy=http://192.168.107.4:3128
+    - NO_PROXY=localhost,127.0.0.1,192.168.107.0/24,host.docker.internal
+    - no_proxy=localhost,127.0.0.1,192.168.107.0/24,host.docker.internal
     image: ghcr.io/openclaw/openclaw:main
     networks:
-    - openclaw-isolated
+      openclaw-isolated:
+        ipv4_address: 192.168.107.2
+      openclaw-external: {}
     ports:
     - 127.0.0.1:18788:18789
     - 0.0.0.0:9091:9090
@@ -57,12 +76,16 @@ services:
     - /Users/rexmacmini/Project/active_projects:/home/node/projects:ro
     extra_hosts:
     - host.docker.internal:host-gateway
+    depends_on:
+      squid-proxy:
+        condition: service_started
 
   nginx-https-proxy:
     image: nginx:latest
     container_name: openclaw-https-proxy
     networks:
-    - openclaw-isolated
+      openclaw-isolated:
+        ipv4_address: 192.168.107.3
     ports:
     - 0.0.0.0:18789:18789
     volumes:
@@ -72,3 +95,60 @@ services:
     - openclaw
     restart: unless-stopped
     command: nginx -g 'daemon off;'
+
+  squid-proxy:
+    image: ubuntu/squid:latest
+    container_name: openclaw-squid-proxy
+    networks:
+      openclaw-isolated:
+        ipv4_address: 192.168.107.4
+      openclaw-external: {}
+    extra_hosts:
+    - host.docker.internal:host-gateway
+    volumes:
+    - ./squid/squid.conf:/etc/squid/squid.conf:ro
+    - ./squid/allowed-domains.txt:/etc/squid/allowed-domains.txt:ro
+    - ./squid/blocked-domains.txt:/etc/squid/blocked-domains.txt:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k check 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+
+  browser:
+    image: browserless/chrome:latest
+    container_name: openclaw-browser
+    networks:
+      openclaw-external: {}
+      openclaw-isolated:
+        ipv4_address: 192.168.107.5
+    environment:
+    - CONNECTION_TIMEOUT=600000
+    - MAX_CONCURRENT_SESSIONS=3
+    - ENABLE_DEBUGGER=true
+    - DEFAULT_LAUNCH_ARGS=["--no-sandbox","--disable-dev-shm-usage","--disable-gpu","--proxy-server=http://192.168.107.4:3128"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/json/version"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  searxng:
+    image: searxng/searxng:latest
+    container_name: openclaw-searxng
+    networks:
+      openclaw-isolated:
+        ipv4_address: 192.168.107.6
+      openclaw-external: {}
+    volumes:
+    - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+    - SEARXNG_BASE_URL=http://192.168.107.6:8080/
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, wget, --quiet, --tries=1, --spider, http://localhost:8080/healthz]
+      interval: 30s
+      timeout: 5s
+      retries: 3
