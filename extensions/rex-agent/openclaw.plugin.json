@@ -1,6 +1,0 @@
-{
-  "id": "rex-agent",
-  "name": "Rex Agent Tools",
-  "version": "1.0.0",
-  "description": "Shell execution, code analysis, and Claude dev task dispatch"
-}
