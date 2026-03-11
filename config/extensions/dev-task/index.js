@@ -13,6 +13,19 @@ const POLL_INTERVAL_MS = 30 * 1000; // 30 seconds
 const RATE_LIMIT_MAX = 20;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const _taskTimestamps = [];
+// ── Task output rules: raw data only ──
+const TASK_PREAMBLE = `IMPORTANT OUTPUT RULES (follow strictly):
+1. Every claim must be backed by a command you ran and its FULL raw output
+2. Do NOT summarize or paraphrase command output — paste it verbatim
+3. Do NOT generate analysis, opinions, or recommendations unless explicitly asked
+4. If a command fails, paste the error output verbatim
+5. End your response with a structured result block:
+   ## Result
+   <command>: <full output>
+   Status: PASS / FAIL
+
+Task: `;
+
 
 function checkRateLimit() {
   const now = Date.now();
@@ -374,7 +387,7 @@ export default function register(api) {
           body: JSON.stringify({
             provider: "claude",
             cwd,
-            prompt: task,
+            prompt: TASK_PREAMBLE + task,
             mode: "remote",
             maxTurns: 20,
             _taskMeta: { project: projectName, taskNum },
