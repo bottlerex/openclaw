@@ -43,7 +43,7 @@ services:
     - OPENCLAW_WEBSOCKET_HEARTBEAT_INTERVAL=30s
     - OPENCLAW_WEBSOCKET_IDLE_TIMEOUT=60s
     - OPENCLAW_TOOLS_ALLOWLIST_RELOAD_INTERVAL=3600s
-    - OPENCLAW_LOG_LEVEL=debug
+    - OPENCLAW_LOG_LEVEL=warn
     - SESSION_BRIDGE_URL=http://host.docker.internal:7788
     - OPENCLAW_CRASH_RESTART_DELAY=10s
     - GIT_CONFIG_GLOBAL=/home/node/.openclaw/.gitconfig
@@ -72,6 +72,7 @@ services:
     - ./gog-config:/home/node/.config/gogcli
     - ./ssh-keys:/home/node/.ssh:ro
     - /Users/rexmacmini/.claude/projects/-Users-rexmacmini/memory:/home/node/claude-memory:ro
+    - /Users/rexmacmini/.agent-memory/knowledge:/home/node/agent-knowledge:ro
     - /Users/rexmacmini/.claude/rules:/home/node/claude-rules:ro
     - /Users/rexmacmini/Project/active_projects:/home/node/projects:ro
     extra_hosts:
@@ -86,6 +87,7 @@ services:
     networks:
       openclaw-isolated:
         ipv4_address: 192.168.107.3
+      openclaw-external: {}
     ports:
     - 0.0.0.0:18789:18789
     volumes:
@@ -94,6 +96,11 @@ services:
     depends_on:
     - openclaw
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsk", "https://localhost:18789/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     command: nginx -g 'daemon off;'
 
   squid-proxy:
