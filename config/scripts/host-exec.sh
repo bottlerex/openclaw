@@ -30,7 +30,7 @@ BASE_CMD=$(basename "$FIRST_CMD")
 ALLOWED_CMDS="gh gog git docker ls cat grep find head tail wc sort awk sed cut tr diff uptime hostname whoami uname date pwd df du stat id env ps echo curl ssh node npm npx python3 pip basename dirname realpath mktemp timeout tee open osascript nohup"
 
 # Allowed scripts (full paths on host)
-ALLOWED_SCRIPTS="gog-auth-bridge.sh disk-info.sh git-wrapper.sh system-stats.sh process-manager.sh network-check.sh ollama-manager.sh ollama-auto-restart.sh taiwan-stock-status.sh taiwan-stock-backup.sh taiwan-stock-eval.sh log-checker.sh notify.sh fetch-statements.sh"
+ALLOWED_SCRIPTS="gog-auth-bridge.sh disk-info.sh git-wrapper.sh system-stats.sh process-manager.sh network-check.sh ollama-manager.sh ollama-auto-restart.sh taiwan-stock-status.sh taiwan-stock-backup.sh taiwan-stock-eval.sh log-checker.sh notify.sh fetch-statements.sh backup-verify.sh"
 
 # Check if command is allowed
 CMD_ALLOWED=false
