@@ -74,3 +74,40 @@ vendor/
 data/rag-index.sqlite
 .state
 .logs/
+
+# Runtime state & tokens
+config/.spawn-token
+config/execd-token.txt
+config/.gitconfig
+config/dev-tasks.jsonl
+config/subagents/
+config/openclaw.json.isolation_test
+
+# Workspace agent state (auto-generated)
+config/workspace-*/
+
+# Media (runtime generated)
+config/media/
+
+# Browser profiles (local state)
+config/browser/
+
+# Credentials
+config/credentials/
+
+# Monitoring configs (generated)
+config/openclaw-p0-hardening.json
+config/exec-approvals-p04-additions.json
+config/grafana-rag-dashboard.json
+config/prometheus-rag-config.yml
+config/rag-alerting-rules.yaml
+
+# Deprecated docs
+config/EXEC_FIXES.md
+config/HOST_SCRIPT_LAYER.md
+config/claude-knowledge-summary.md
+
+# Backup files (catch-all)
+*.backup.*
+*.bak2
+*.backup
