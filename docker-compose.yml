@@ -40,6 +40,7 @@ services:
     - OPENCLAW_HEALTH_CHECK_TIMEOUT=5s
     - OPENCLAW_PROVIDER_RESTART_MAX_RETRIES=3
     - OPENCLAW_TELEGRAM_GETUPDATE_TIMEOUT=5s
+    - OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=true
     - OPENCLAW_WEBSOCKET_HEARTBEAT_INTERVAL=30s
     - OPENCLAW_WEBSOCKET_IDLE_TIMEOUT=60s
     - OPENCLAW_TOOLS_ALLOWLIST_RELOAD_INTERVAL=3600s
@@ -106,6 +107,8 @@ services:
   squid-proxy:
     image: ubuntu/squid:latest
     container_name: openclaw-squid-proxy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     networks:
       openclaw-isolated:
         ipv4_address: 192.168.107.4
