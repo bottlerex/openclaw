@@ -1,5 +1,6 @@
 #!/bin/bash
 # OpenClaw 設備配對自動批准腳本
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 set -e
 
 PENDING_FILE="/Users/rexmacmini/openclaw/config/devices/pending.json"

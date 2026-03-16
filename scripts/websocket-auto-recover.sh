@@ -46,7 +46,7 @@ recover_websocket() {
   fi
 
   # Verify health
-  if curl -s http://localhost:18789/health | grep -q '"ok":true'; then
+  if curl -sk https://localhost:18789/health | grep -q '"ok":true'; then
     log "  ✅ Gateway is healthy"
     return 0
   else

@@ -1,14 +1,15 @@
 #!/bin/bash
 # OpenClaw 每日健康檢查記錄
 
-HEALTH_URL="http://localhost:3457/health"
+# 從容器內部取 health（避免 HTTPS 問題）
+HEALTH_URL="docker exec openclaw-agent curl -s http://localhost:18789/health"
 LOG_DIR="$HOME/openclaw/logs"
 METRICS_DIR="$HOME/openclaw/metrics"
 
 mkdir -p "$LOG_DIR" "$METRICS_DIR"
 
 # 獲取健康檢查數據
-HEALTH_DATA=$(curl -s "$HEALTH_URL" 2>/dev/null)
+HEALTH_DATA=$($HEALTH_URL 2>/dev/null)
 
 if [ -z "$HEALTH_DATA" ]; then
     echo "❌ Health check failed at $(date)" >> "$LOG_DIR/daily-health.log"

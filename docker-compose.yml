@@ -62,7 +62,7 @@ services:
       openclaw-external: {}
     ports:
     - 127.0.0.1:18788:18789
-    - 0.0.0.0:9091:9090
+    - 127.0.0.1:9091:9090
     restart: unless-stopped
     volumes:
     - ./config:/home/node/.openclaw
@@ -72,8 +72,8 @@ services:
     - ./gog-config:/home/node/.config/gogcli
     - ./ssh-keys:/home/node/.ssh:ro
     - /Users/rexmacmini/.claude/projects/-Users-rexmacmini/memory:/home/node/claude-memory:ro
-    - /Users/rexmacmini/.agent-memory/knowledge:/home/node/agent-knowledge:ro
-    - /Users/rexmacmini/.claude/rules:/home/node/claude-rules:ro
+    - /Users/rexmacmini/Library/Mobile Documents/com~apple~CloudDocs/Obsidian Vault/系統/agent-knowledge:/home/node/agent-knowledge:ro
+    - /Users/rexmacmini/Library/Mobile Documents/com~apple~CloudDocs/Obsidian Vault/系統/claude-rules:/home/node/claude-rules:ro
     - /Users/rexmacmini/Project/active_projects:/home/node/projects:ro
     extra_hosts:
     - host.docker.internal:host-gateway

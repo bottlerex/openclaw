@@ -33,7 +33,7 @@ recover_telegram() {
 
   # Step 2: Verify health
   log "  → Health verification..."
-  if curl -s http://localhost:18789/health | grep -q '"ok":true'; then
+  if curl -sk https://localhost:18789/health | grep -q '"ok":true'; then
     log "  ✅ Telegram recovery successful"
     return 0
   else

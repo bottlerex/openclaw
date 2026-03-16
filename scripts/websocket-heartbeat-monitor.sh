@@ -3,7 +3,7 @@
 # 改進：指數退避重連 + 內存監控 + 優雅恢復
 
 CONTAINER_NAME="openclaw-agent"
-GATEWAY_URL="http://localhost:18789"
+GATEWAY_URL="https://localhost:18789"
 LOG_FILE="/tmp/websocket-heartbeat.log"
 METRICS_FILE="/tmp/websocket-metrics.json"
 PING_INTERVAL=30  # 秒

@@ -2,6 +2,7 @@
 # OpenClaw P0 Monitor Dispatcher — Final v3 (macOS compatible)
 
 set -e
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 CONTAINER_NAME="openclaw-agent"
 LOG_FILE="/tmp/p0-monitor-dispatcher.log"
@@ -16,7 +17,7 @@ log() {
 
 send_telegram() {
   local msg="$1"
-  curl -s -X POST http://localhost:18789/telegram/send \
+  curl -sk -X POST https://localhost:18789/telegram/send \
     -H "Content-Type: application/json" \
     -d "{\"to\": \"$TELEGRAM_CHAT\", \"text\": \"$msg\"}" 2>/dev/null || true
 }
@@ -43,7 +44,7 @@ if [ "$IS_RUNNING" != "true" ]; then
         
         # Wait for gateway health
         for i in {1..10}; do
-          if curl -s http://localhost:18789/health > /dev/null 2>&1; then
+          if curl -sk https://localhost:18789/ready > /dev/null 2>&1; then
             log "  ✅ Gateway health check PASS"
             send_telegram "✅ OPENCLAW AUTO-RECOVERY SUCCESS\n⏰ Time: $(date)\n✓ Container restarted\n✓ Gateway online"
             exit 0
@@ -115,10 +116,57 @@ if echo "$RECENT_LOGS" | grep -qE "exec.*denied|timeout: not found"; then
 fi
 
 # Final check
-if curl -s http://localhost:18789/health > /dev/null 2>&1; then
+if curl -sk https://localhost:18789/ready > /dev/null 2>&1; then
   log "✅ Health check: PASS"
 else
   log "⚠️  Health check: No response"
 fi
 
 exit 0
+
+# ============ CONFIG INTEGRITY CHECK ============
+CONFIG_FILE="$HOME/openclaw/config/openclaw.json"
+CONFIG_SNAPSHOT="$HOME/openclaw/config/.openclaw-config-snapshot"
+
+if [ -f "$CONFIG_FILE" ]; then
+  # Check critical fields exist
+  MISSING=""
+  python3 -c "
+import json, sys
+c = json.load(open(\"$CONFIG_FILE\"))
+required = [
+  (\"gateway.auth.token\", c.get(\"gateway\",{}).get(\"auth\",{}).get(\"token\")),
+  (\"channels\", c.get(\"channels\")),
+  (\"plugins\", c.get(\"plugins\")),
+]
+missing = [k for k,v in required if not v]
+if missing:
+  print(\",\".join(missing))
+  sys.exit(1)
+" 2>/dev/null
+  RC=$?
+  if [ $RC -ne 0 ]; then
+    MISSING_FIELDS=$(python3 -c "
+import json, sys
+c = json.load(open(\"$CONFIG_FILE\"))
+required = [
+  (\"gateway.auth.token\", c.get(\"gateway\",{}).get(\"auth\",{}).get(\"token\")),
+  (\"channels\", c.get(\"channels\")),
+  (\"plugins\", c.get(\"plugins\")),
+]
+print(\",\".join([k for k,v in required if not v]))
+" 2>/dev/null)
+    log "🚨 CONFIG INTEGRITY FAIL: missing fields: $MISSING_FIELDS"
+    send_telegram "🚨 CONFIG INTEGRITY ALERT\nMissing: $MISSING_FIELDS\nRestoring from git..."
+    cd "$HOME/openclaw" && git checkout -- config/openclaw.json 2>/dev/null
+    log "  → Restored config from git HEAD"
+    docker restart "$CONTAINER_NAME" 2>/dev/null
+  fi
+
+  # Check PRIMARY_MODEL env
+  HAS_MODEL=$(docker exec "$CONTAINER_NAME" printenv OPENCLAW_PRIMARY_MODEL 2>/dev/null)
+  if [ -z "$HAS_MODEL" ]; then
+    log "🚨 OPENCLAW_PRIMARY_MODEL missing from container env"
+    send_telegram "🚨 OPENCLAW_PRIMARY_MODEL missing — container may need restart with correct env"
+  fi
+fi

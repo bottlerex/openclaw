@@ -1,5 +1,6 @@
 #!/bin/bash
 # OpenClaw P0.4: Tools Allowlist Auto-Sync
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 # Runs daily to sync allowed commands from logs to config
 
 set -e
@@ -100,7 +101,7 @@ log "🧹 Cleaned up old backups (>7 days)"
 log "✅ Sync completed successfully"
 
 # Send Telegram notification
-curl -s -X POST http://localhost:18789/telegram/send \
+curl -s -X POST https://localhost:18789/telegram/send \
   -H "Content-Type: application/json" \
   -d "{\"to\": \"150944774\", \"text\": \"✅ P0.4: Tools allowlist synced\n• Rules: $RULE_COUNT\n• Time: $(date)\"}" 2>/dev/null || true
 
