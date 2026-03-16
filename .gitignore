@@ -112,3 +112,5 @@ config/claude-knowledge-summary.md
 *.bak2
 *.backup
 config/extensions/memory-lancedb-pro/
+config/projects.json
+UPGRADE-ASSESSMENT-*.md
