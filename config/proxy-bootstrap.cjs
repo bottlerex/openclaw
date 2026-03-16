@@ -59,9 +59,11 @@ try {
   };
 
   // 2. Patch globalThis.fetch to use proxy with NO_PROXY support
+  // allowH2: false — Squid CONNECT tunnel + HTTP/2 ALPN causes TLS hangs
+  // to high-latency targets (e.g. Telegram DC in Europe from Taiwan)
   const { ProxyAgent, Agent } = appRequire('undici');
-  const proxyAgent = new ProxyAgent({ uri: proxyUrl });
-  const directAgent = new Agent();
+  const proxyAgent = new ProxyAgent({ uri: proxyUrl, allowH2: false });
+  const directAgent = new Agent({ allowH2: false, connect: { autoSelectFamily: false } });
 
   const origFetch = globalThis.fetch;
   if (origFetch) {
