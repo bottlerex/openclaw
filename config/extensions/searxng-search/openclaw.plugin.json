@@ -1,0 +1,10 @@
+{
+  "id": "searxng-search",
+  "name": "SearXNG Search",
+  "description": "Local web search via SearXNG instance",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "id": "verified-ops",
+  "name": "Verified Operations",
+  "description": "Stateful operations with automatic verification. Returns structured {success, verified} results.",
+  "configSchema": { "type": "object", "additionalProperties": false }
+}

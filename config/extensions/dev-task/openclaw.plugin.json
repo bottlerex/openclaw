@@ -1,0 +1,10 @@
+{
+  "id": "dev-task",
+  "name": "Dev Task",
+  "description": "Dispatch development tasks to Claude Code via Session Bridge",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
