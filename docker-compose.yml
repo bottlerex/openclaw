@@ -54,8 +54,8 @@ services:
     - HTTPS_PROXY=http://192.168.107.4:3128
     - http_proxy=http://192.168.107.4:3128
     - https_proxy=http://192.168.107.4:3128
-    - NO_PROXY=localhost,127.0.0.1,192.168.107.0/24,host.docker.internal
-    - no_proxy=localhost,127.0.0.1,192.168.107.0/24,host.docker.internal
+    - NO_PROXY=localhost,127.0.0.1,192.168.107.0/24,host.docker.internal,api.telegram.org
+    - no_proxy=localhost,127.0.0.1,192.168.107.0/24,host.docker.internal,api.telegram.org
     image: ghcr.io/openclaw/openclaw:main
     networks:
       openclaw-isolated:
