@@ -111,3 +111,4 @@ config/claude-knowledge-summary.md
 *.backup.*
 *.bak2
 *.backup
+config/extensions/memory-lancedb-pro/
